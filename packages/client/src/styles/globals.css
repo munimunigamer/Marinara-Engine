@@ -315,8 +315,13 @@
    5. BASE RESET & BODY
    ───────────────────────────────────────────── */
 * {
-  @apply border-[var(--border)];
   cursor: var(--cursor-pink), auto;
+}
+
+@layer base {
+  * {
+    @apply border-[var(--border)];
+  }
 }
 
 input, select, textarea {
