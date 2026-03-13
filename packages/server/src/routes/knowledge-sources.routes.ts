@@ -65,9 +65,10 @@ async function writeMeta(meta: MetaStore) {
  */
 export async function extractFileText(filePath: string): Promise<string> {
   // Ensure the resolved path is within SOURCES_DIR (defense-in-depth)
-  const { resolve } = await import("path");
+  const { resolve, sep } = await import("path");
   const resolved = resolve(filePath);
-  if (!resolved.startsWith(resolve(SOURCES_DIR))) {
+  const root = resolve(SOURCES_DIR);
+  if (resolved !== root && !resolved.startsWith(root + sep)) {
     return "";
   }
 
