@@ -367,7 +367,11 @@ export async function generateRoutes(app: FastifyInstance) {
       const hasPerChatAgentList = chatActiveAgentIds.length > 0;
       const perChatAgentSet = new Set(chatActiveAgentIds);
 
-      const enabledConfigs = chatEnableAgents ? await agentsStore.listEnabled() : [];
+      const enabledConfigs = chatEnableAgents
+        ? hasPerChatAgentList
+          ? await agentsStore.list()
+          : await agentsStore.listEnabled()
+        : [];
 
       // Also include built-in agents that are enabled by default but have no DB row yet.
       // We must check ALL configs (not just enabled) so that explicitly-disabled
