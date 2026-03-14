@@ -840,15 +840,17 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
               </button>
               <p className="text-[10px] text-[var(--muted-foreground)] px-1">
                 {metadata.enableAgents
-                  ? "If enabled, the agents added to this chat will work."
-                  : "If disabled, none of the agents will work."}
+                  ? "If enabled, this chat can use workspace default agents or any agents you add below."
+                  : "If disabled, no agents (workspace default or per-chat) will run for this chat."}
               </p>
 
               {/* Per-chat agent list */}
               {metadata.enableAgents && (
                 <>
                   {activeAgentIds.length === 0 ? (
-                    <p className="text-[11px] text-[var(--muted-foreground)] px-1">No agents added to this chat.</p>
+                    <p className="text-[11px] text-[var(--muted-foreground)] px-1">
+                      No per-chat agent overrides. Workspace default agents will be used for this chat.
+                    </p>
                   ) : (
                     <div className="flex flex-col gap-1">
                       {activeAgentIds.map((agentId) => {
