@@ -4447,12 +4447,18 @@ export async function generateRoutes(app: FastifyInstance) {
                   content: msgContent,
                 });
 
+                // Remove the original message from the source chat (redirect, not copy)
+                if (messageId) {
+                  await chats.removeMessage(messageId);
+                }
+
                 reply.raw.write(
                   `data: ${JSON.stringify({
                     type: "cross_post",
                     data: {
                       targetChatId: targetChat.id,
                       targetChatName: targetChat.name,
+                      sourceChatId: input.chatId,
                       characterId,
                     },
                   })}\n\n`,

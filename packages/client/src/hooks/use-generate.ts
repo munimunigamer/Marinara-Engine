@@ -688,10 +688,11 @@ export function useGenerate() {
             }
 
             case "cross_post": {
-              const cpData = event.data as { targetChatId: string; targetChatName: string; characterId: string };
-              toast(`Message also sent to ${cpData.targetChatName}`, { icon: "↗️" });
-              // Invalidate the target chat's messages so they refresh
+              const cpData = event.data as { targetChatId: string; targetChatName: string; sourceChatId: string; characterId: string };
+              toast(`Message redirected to ${cpData.targetChatName}`, { icon: "↗️" });
+              // Invalidate both chats: target got a new message, source had it removed
               qc.invalidateQueries({ queryKey: ["chats", "messages", cpData.targetChatId] });
+              qc.invalidateQueries({ queryKey: ["chats", "messages", cpData.sourceChatId] });
               break;
             }
 

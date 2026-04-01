@@ -12,7 +12,7 @@ on:
 
 jobs:
   build-better-sqlite3:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -67,11 +67,7 @@ jobs:
 
           # Set cross-compilation environment
           # Use aarch64-linux-android28 for broad compatibility (Android 9+)
-          TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-aarch64"
-          # Fallback for x86_64 runners
-          if [ ! -d "$TOOLCHAIN" ]; then
-            TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
-          fi
+          TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
 
           export CC="${TOOLCHAIN}/bin/aarch64-linux-android28-clang"
           export CXX="${TOOLCHAIN}/bin/aarch64-linux-android28-clang++"
