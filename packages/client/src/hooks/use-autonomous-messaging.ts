@@ -152,8 +152,6 @@ export function useAutonomousMessaging(
           connectionId: null,
         });
         if (produced) {
-          // Invalidate messages to pick up the new message
-          qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
           // Re-sort sidebar so this chat floats to the top
           qc.invalidateQueries({ queryKey: chatKeys.list() });
           // Fire notification callback

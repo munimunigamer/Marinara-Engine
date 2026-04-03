@@ -34,12 +34,12 @@ export function useChat(id: string | null) {
 export function useChatMessages(chatId: string | null, pageSize: number = 0) {
   return useInfiniteQuery({
     queryKey: chatKeys.messages(chatId ?? ""),
-    queryFn: ({ pageParam }) => {
+    queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams();
       if (pageSize > 0) params.set("limit", String(pageSize));
       if (pageParam) params.set("before", pageParam);
       const qs = params.toString();
-      return api.get<Message[]>(`/chats/${chatId}/messages${qs ? `?${qs}` : ""}`);
+      return api.get<Message[]>(`/chats/${chatId}/messages${qs ? `?${qs}` : ""}`, { signal });
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => {
