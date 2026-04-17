@@ -45,7 +45,10 @@ import { HelpTooltip } from "../ui/HelpTooltip";
 import {
   BUILT_IN_AGENTS,
   BUILT_IN_TOOLS,
+  DEFAULT_WORLD_GRAPH_SYNC_SETTINGS,
   DEFAULT_AGENT_TOOLS,
+  resolveWorldGraphSyncSettings,
+  type WorldGraphSyncProfile,
   getDefaultAgentPrompt,
   type AgentPhase,
   type ToolDefinition,
@@ -120,6 +123,11 @@ export function AgentEditor() {
   const [localSourceFileIds, setLocalSourceFileIds] = useState<string[]>([]);
   const [localAutoGenerateAvatars, setLocalAutoGenerateAvatars] = useState(false);
   const [localUseAvatarReferences, setLocalUseAvatarReferences] = useState(false);
+  const [localWorldGraphSyncProfile, setLocalWorldGraphSyncProfile] =
+    useState<WorldGraphSyncProfile>(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncProfile);
+  const [localWorldGraphSyncChunkCharLimit, setLocalWorldGraphSyncChunkCharLimit] = useState(
+    DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit,
+  );
   const [spotifyStatus, setSpotifyStatus] = useState<{
     connected: boolean;
     expired: boolean;
@@ -170,6 +178,9 @@ export function AgentEditor() {
       setLocalSourceFileIds(settings.sourceFileIds ?? []);
       setLocalAutoGenerateAvatars(settings.autoGenerateAvatars ?? false);
       setLocalUseAvatarReferences(settings.useAvatarReferences ?? false);
+      const syncSettings = resolveWorldGraphSyncSettings(settings);
+      setLocalWorldGraphSyncProfile(syncSettings.syncProfile);
+      setLocalWorldGraphSyncChunkCharLimit(syncSettings.syncChunkCharLimit);
       setLocalPrompt(dbConfig.promptTemplate || "");
     } else if (builtIn) {
       setLocalName(builtIn.name);
@@ -190,6 +201,8 @@ export function AgentEditor() {
       setLocalSourceFileIds([]);
       setLocalAutoGenerateAvatars(false);
       setLocalUseAvatarReferences(false);
+      setLocalWorldGraphSyncProfile(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncProfile);
+      setLocalWorldGraphSyncChunkCharLimit(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit);
       setLocalPrompt("");
     } else {
       // Brand new custom agent — start empty
@@ -210,6 +223,8 @@ export function AgentEditor() {
       setLocalSourceFileIds([]);
       setLocalAutoGenerateAvatars(false);
       setLocalUseAvatarReferences(false);
+      setLocalWorldGraphSyncProfile(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncProfile);
+      setLocalWorldGraphSyncChunkCharLimit(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit);
       setLocalPrompt("");
     }
     setDirty(false);
@@ -227,6 +242,7 @@ export function AgentEditor() {
 
   // Knowledge Retrieval agent — lorebook source selector
   const isKnowledgeRetrievalAgent = agentDetailId === "knowledge-retrieval" || dbConfig?.type === "knowledge-retrieval";
+  const isWorldGraphAgent = agentDetailId === "world-graph" || dbConfig?.type === "world-graph";
   const { data: allLorebooks } = useLorebooks();
   const { data: allKnowledgeSources } = useKnowledgeSources();
   const uploadSource = useUploadKnowledgeSource();
@@ -273,6 +289,12 @@ export function AgentEditor() {
   }, [dirty, closeAgentDetail]);
 
   const openAgentDetail = useUIStore((s) => s.openAgentDetail);
+  const applyWorldGraphSyncProfile = useCallback(
+    (profile: WorldGraphSyncProfile) => {
+      setLocalWorldGraphSyncProfile(profile);
+    },
+    [],
+  );
 
   const handleSave = useCallback(async () => {
     if (!agentDetailId) return;
@@ -285,7 +307,7 @@ export function AgentEditor() {
       connectionId: localConnectionId || null,
       promptTemplate: localPrompt,
       settings: {
-        ...(localContextSize !== "" ? { contextSize: Number(localContextSize) } : {}),
+        ...(!isWorldGraphAgent && localContextSize !== "" ? { contextSize: Number(localContextSize) } : {}),
         ...(localRunInterval !== "" ? { runInterval: Number(localRunInterval) } : {}),
         ...(localInjectAsSection ? { injectAsSection: true } : {}),
         enabledTools: localEnabledTools,
@@ -295,6 +317,12 @@ export function AgentEditor() {
         ...(localImageConnectionId ? { imageConnectionId: localImageConnectionId } : {}),
         ...(localAutoGenerateAvatars ? { autoGenerateAvatars: true } : {}),
         ...(localUseAvatarReferences ? { useAvatarReferences: true } : {}),
+        ...(isWorldGraphAgent
+          ? {
+              syncProfile: localWorldGraphSyncProfile,
+              syncChunkCharLimit: localWorldGraphSyncChunkCharLimit,
+            }
+          : {}),
       },
     };
 
@@ -342,8 +370,11 @@ export function AgentEditor() {
     localSourceFileIds,
     localAutoGenerateAvatars,
     localUseAvatarReferences,
+    localWorldGraphSyncProfile,
+    localWorldGraphSyncChunkCharLimit,
     dbConfig,
     builtIn,
+    isWorldGraphAgent,
     updateAgent,
     createAgent,
     openAgentDetail,
@@ -652,8 +683,88 @@ export function AgentEditor() {
             </FieldGroup>
           )}
 
+          {/* ── World Graph Sync ── */}
+          {isWorldGraphAgent && (
+            <FieldGroup
+              label="World Graph Sync"
+              icon={<Layers size="0.875rem" className="text-[var(--primary)]" />}
+              help="Controls how lorebook sync reads entry content and how strict the graph-building pass is. Presets tune the sync strategy, while scene context length and chunk size stay as separate knobs."
+            >
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <p className="text-[0.6875rem] font-medium text-[var(--foreground)]">Mode</p>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    {([
+                      {
+                        id: "fast",
+                        label: "Fast",
+                        description: "Lowest cost, lighter validation.",
+                      },
+                      {
+                        id: "balanced",
+                        label: "Balanced",
+                        description: "Default mix of cost and accuracy.",
+                      },
+                      {
+                        id: "full",
+                        label: "Full",
+                        description: "Heavier ingest and stricter repair.",
+                      },
+                    ] as const).map((profile) => {
+                      const selected = localWorldGraphSyncProfile === profile.id;
+                      return (
+                        <button
+                          key={profile.id}
+                          type="button"
+                          onClick={() => {
+                            applyWorldGraphSyncProfile(profile.id);
+                            markDirty();
+                          }}
+                          className={cn(
+                            "rounded-xl px-3 py-3 text-left ring-1 transition-all",
+                            selected
+                              ? "bg-[var(--primary)]/10 text-[var(--foreground)] ring-[var(--primary)]/40"
+                              : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                          )}
+                        >
+                          <p className="text-sm font-medium">{profile.label}</p>
+                          <p className="mt-1 text-[0.625rem] leading-relaxed">{profile.description}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                    Mode controls the hidden sync behavior behind the scenes. Only chunk size is editable separately.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[0.6875rem] font-medium text-[var(--foreground)] mb-1.5">
+                    Chunk Char Limit
+                  </label>
+                  <input
+                    type="number"
+                    min={8000}
+                    max={120000}
+                    step={1000}
+                    value={localWorldGraphSyncChunkCharLimit}
+                    onChange={(e) => {
+                      const value = Math.max(8000, Math.min(120000, parseInt(e.target.value) || 8000));
+                      setLocalWorldGraphSyncChunkCharLimit(value);
+                      markDirty();
+                    }}
+                    className="w-full max-w-xs rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm tabular-nums ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                  />
+                  <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                    Independent from mode. Larger chunks reduce API calls but pack more lore into each batch.
+                  </p>
+                </div>
+              </div>
+            </FieldGroup>
+          )}
+
           {/* ── Context Size (hidden for Chat Summary — that uses the popover) ── */}
-          {!isChatSummaryAgent && (
+          {!isChatSummaryAgent && !isWorldGraphAgent && (
             <FieldGroup
               label="Context Size"
               icon={<Clock size="0.875rem" className="text-[var(--primary)]" />}

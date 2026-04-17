@@ -2,7 +2,7 @@
 // World Graph Lorebook Sync (CodeAct via QuickJS DSL)
 // ──────────────────────────────────────────────
 import type { BaseLLMProvider } from "../llm/base-provider.js";
-import type { Lorebook, LorebookEntry, WorldGraphPatch } from "@marinara-engine/shared";
+import type { Lorebook, LorebookEntry, WorldGraphPatch, WorldGraphSyncSettings } from "@marinara-engine/shared";
 import { applyWorldPatch, createWorldGraphRuntime, type WorldGraphRuntime } from "./world-graph-runtime.js";
 import { runWorldGraphScript } from "./world-graph-script-runtime.js";
 
@@ -21,19 +21,17 @@ interface BuildLorebookGraphInput {
   model: string;
   lorebooks: LorebookWithEntries[];
   scene: SceneContext;
+  settings: WorldGraphSyncSettings;
 }
 
-const ENTRY_CHUNK_CHAR_LIMIT = 22_000;
 const MAX_MANIFEST_CHARS = 18_000;
 const MAX_DIGEST_CHARS = 14_000;
 const MAX_FINAL_SCRIPT_CHARS = 80_000;
-const MAX_DRAFT_REPAIR_ATTEMPTS = 1;
-const MAX_FINAL_REPAIR_ATTEMPTS = 3;
 
 export async function buildWorldGraphPatchFromLorebooks(input: BuildLorebookGraphInput) {
   const entries = input.lorebooks.flatMap((book) => book.entries.map((entry) => ({ book, entry })));
-  const manifest = buildEntryManifest(entries).slice(0, MAX_MANIFEST_CHARS);
-  const chunks = chunkEntries(entries);
+  const manifest = buildEntryManifest(entries, input.settings).slice(0, MAX_MANIFEST_CHARS);
+  const chunks = chunkEntries(entries, input.settings);
   const draftScripts: string[] = [];
   const draftRuntime = createWorldGraphRuntime();
   let graphDigest = "No graph operations have been drafted yet.";
@@ -62,7 +60,7 @@ export async function buildWorldGraphPatchFromLorebooks(input: BuildLorebookGrap
             `</graph_so_far>`,
             ``,
             `<entries_to_review_in_this_batch>`,
-            formatEntries(batch) || "(No lorebook entries in this batch.)",
+            formatEntries(batch, input.settings) || "(No lorebook entries in this batch.)",
             `</entries_to_review_in_this_batch>`,
           ].join("\n"),
         },
@@ -81,14 +79,14 @@ export async function buildWorldGraphPatchFromLorebooks(input: BuildLorebookGrap
           script,
           graphId: "draft",
           stageLabel: `draft batch ${index + 1}/${effectiveChunks.length}`,
-          maxRepairAttempts: MAX_DRAFT_REPAIR_ATTEMPTS,
+          maxRepairAttempts: input.settings.syncValidateDraftChunks ? input.settings.syncMaxDraftRepairAttempts : 0,
           repairContext: [
             `<graph_so_far>`,
             graphDigest,
             `</graph_so_far>`,
             ``,
             `<entries_to_review_in_this_batch>`,
-            formatEntries(batch) || "(No lorebook entries in this batch.)",
+            formatEntries(batch, input.settings) || "(No lorebook entries in this batch.)",
             `</entries_to_review_in_this_batch>`,
           ].join("\n"),
         });
@@ -158,8 +156,8 @@ move("Player", "Current Scene");`;
     script: finalSeedScript,
     graphId: "sync",
     stageLabel: "final reconciliation",
-    maxRepairAttempts: MAX_FINAL_REPAIR_ATTEMPTS,
-    enableRouteReview: true,
+    maxRepairAttempts: input.settings.syncMaxFinalRepairAttempts,
+    enableRouteReview: input.settings.syncFinalRouteReview,
     repairContext: [
       `<all_lorebook_entry_manifest>`,
       manifest || "(No lorebook entries are attached.)",
@@ -294,12 +292,12 @@ Rules:
 - Use placeLocation(...) for containment and connectLocations(...) for traversable movement.
 - Remove or rewrite nonsensical containment such as dimensions being physically inside city buildings unless the lore explicitly requires it.`;
 
-function buildEntryManifest(entries: Array<{ book: Lorebook; entry: LorebookEntry }>) {
+function buildEntryManifest(entries: Array<{ book: Lorebook; entry: LorebookEntry }>, settings: WorldGraphSyncSettings) {
   return entries
     .map(({ book, entry }, index) => {
       const keys = [...entry.keys, ...entry.secondaryKeys].filter(Boolean).join(", ");
       const tagParts = [entry.tag, entry.group, book.category, ...book.tags].filter(Boolean).join(", ");
-      const preview = collapseWhitespace(entry.content).slice(0, 220);
+      const preview = buildPreviewText(entry.content, Math.min(settings.syncPreviewChars, 420));
       return [
         `${index + 1}. [${entry.id}] ${book.name} / ${entry.name}`,
         keys ? `keys: ${keys}` : "",
@@ -312,14 +310,14 @@ function buildEntryManifest(entries: Array<{ book: Lorebook; entry: LorebookEntr
     .join("\n");
 }
 
-function chunkEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>) {
+function chunkEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>, settings: WorldGraphSyncSettings) {
   const chunks: Array<Array<{ book: Lorebook; entry: LorebookEntry }>> = [];
   let current: Array<{ book: Lorebook; entry: LorebookEntry }> = [];
   let currentSize = 0;
 
   for (const item of entries) {
-    const size = formatEntry(item).length + 2;
-    if (current.length > 0 && currentSize + size > ENTRY_CHUNK_CHAR_LIMIT) {
+    const size = formatEntry(item, settings).length + 2;
+    if (current.length > 0 && currentSize + size > settings.syncChunkCharLimit) {
       chunks.push(current);
       current = [];
       currentSize = 0;
@@ -332,11 +330,17 @@ function chunkEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>) 
   return chunks;
 }
 
-function formatEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>) {
-  return entries.map((item) => formatEntry(item)).join("\n\n");
+function formatEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>, settings: WorldGraphSyncSettings) {
+  return entries.map((item) => formatEntry(item, settings)).join("\n\n");
 }
 
-function formatEntry({ book, entry }: { book: Lorebook; entry: LorebookEntry }) {
+function formatEntry(
+  { book, entry }: { book: Lorebook; entry: LorebookEntry },
+  settings: WorldGraphSyncSettings,
+) {
+  const contentLabel = settings.syncEntryDetail === "full" ? "Content" : "Content Preview";
+  const content =
+    settings.syncEntryDetail === "full" ? entry.content || "(empty)" : buildPreviewText(entry.content, settings.syncPreviewChars) || "(empty)";
   return [
     `<entry id="${entry.id}" lorebook="${escapeAttr(book.name)}" category="${escapeAttr(book.category)}">`,
     `Name: ${entry.name}`,
@@ -344,8 +348,8 @@ function formatEntry({ book, entry }: { book: Lorebook; entry: LorebookEntry }) 
     entry.secondaryKeys.length ? `Secondary keys: ${entry.secondaryKeys.join(", ")}` : "",
     entry.tag ? `Tag: ${entry.tag}` : "",
     entry.group ? `Group: ${entry.group}` : "",
-    `Content:`,
-    entry.content || "(empty)",
+    `${contentLabel}:`,
+    content,
     `</entry>`,
   ]
     .filter(Boolean)
@@ -773,6 +777,10 @@ function summarizePatchHistory(scripts: string[], latestPatch: WorldGraphPatch) 
 
 function collapseWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function buildPreviewText(value: string, maxChars: number) {
+  return collapseWhitespace(value).slice(0, maxChars);
 }
 
 function escapeAttr(value: string) {

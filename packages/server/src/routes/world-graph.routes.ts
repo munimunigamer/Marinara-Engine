@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { worldRunRequestSchema, worldGraphPatchSchema } from "@marinara-engine/shared";
+import { resolveWorldGraphSyncSettings, worldRunRequestSchema, worldGraphPatchSchema } from "@marinara-engine/shared";
 import { createWorldGraphStorage } from "../services/world-graph/world-graph.storage.js";
 import { createWorldGraphLifecycle } from "../services/world-graph/world-graph-lifecycle.js";
 import { createWorldGraphTools } from "../services/world-graph/world-graph-tools.js";
@@ -102,13 +102,15 @@ export async function worldGraphRoutes(app: FastifyInstance) {
     if (!chat) return reply.status(404).send({ error: "Chat not found" });
 
     const input = worldGraphSyncLorebooksSchema.parse(req.body ?? {});
-    const connection = await resolveConnection(input.connectionId, chat.connectionId);
+    const worldGraphAgent = await agents.getByType("world-graph");
+    const syncSettings = resolveWorldGraphSyncSettings(parseJsonRecord(worldGraphAgent?.settings));
+    const connection = await resolveConnection(input.connectionId, worldGraphAgent?.connectionId, chat.connectionId);
     if (!connection) {
       return reply.status(400).send({ error: "No API connection configured for lorebook sync." });
     }
 
     const relevantLorebooks = await getRelevantLorebooks(chat);
-    const scene = await buildSceneContext(chat);
+    const scene = await buildSceneContext(chat, syncSettings.syncSceneMessageCount);
     const provider = createLLMProvider(connection.conn.provider, connection.baseUrl, connection.conn.apiKey);
 
     let syncResult: Awaited<ReturnType<typeof buildWorldGraphPatchFromLorebooks>>;
@@ -118,6 +120,7 @@ export async function worldGraphRoutes(app: FastifyInstance) {
         model: connection.conn.model,
         lorebooks: relevantLorebooks,
         scene,
+        settings: syncSettings,
       });
     } catch (error) {
       return reply.status(400).send({
@@ -178,10 +181,13 @@ export async function worldGraphRoutes(app: FastifyInstance) {
     };
   }
 
-  async function resolveConnection(connectionId: string | undefined, chatConnectionId: string | null | undefined) {
-    const worldGraphAgent = await agents.getByType("world-graph");
+  async function resolveConnection(
+    connectionId: string | undefined,
+    agentConnectionId: string | null | undefined,
+    chatConnectionId: string | null | undefined,
+  ) {
     const defaultAgentConn = await connections.getDefaultForAgents();
-    let requestedId = connectionId ?? worldGraphAgent?.connectionId ?? defaultAgentConn?.id ?? chatConnectionId ?? undefined;
+    let requestedId = connectionId ?? agentConnectionId ?? defaultAgentConn?.id ?? chatConnectionId ?? undefined;
     if (requestedId === "random") {
       const pool = await connections.listRandomPool();
       requestedId = pool.length ? pool[Math.floor(Math.random() * pool.length)]!.id : undefined;
@@ -226,7 +232,7 @@ export async function worldGraphRoutes(app: FastifyInstance) {
     return relevantBooks.map((book) => ({ ...book, entries: entriesByBook.get(book.id) ?? [] }));
   }
 
-  async function buildSceneContext(chat: Awaited<ReturnType<typeof chats.getById>>) {
+  async function buildSceneContext(chat: Awaited<ReturnType<typeof chats.getById>>, recentMessageCount: number) {
     const metadata = parseJsonRecord(chat?.metadata);
     const characterIds = parseStringArray(chat?.characterIds);
     const characterNames: string[] = [];
@@ -247,7 +253,7 @@ export async function worldGraphRoutes(app: FastifyInstance) {
     }
 
     const messages = chat ? await chats.listMessages(chat.id) : [];
-    const recentMessages = messages.slice(-24).map((message: any) => ({
+    const recentMessages = messages.slice(-recentMessageCount).map((message: any) => ({
       role: String(message.role ?? "message"),
       content: String(message.content ?? ""),
     }));
