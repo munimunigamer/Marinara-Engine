@@ -77,6 +77,12 @@ export const worldPatchOperationSchema = z.discriminatedUnion("type", [
     data: attrsSchema.optional(),
   }),
   z.object({
+    type: z.literal("placeLocation"),
+    location: z.string().min(1),
+    parent: z.string().min(1),
+    data: attrsSchema.optional(),
+  }),
+  z.object({
     type: z.literal("disconnectLocations"),
     from: z.string().min(1),
     to: z.string().min(1),

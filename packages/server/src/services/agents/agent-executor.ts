@@ -777,6 +777,7 @@ function buildAgentExtras(context: AgentContext): string {
 /** Map agent type → its primary result type. */
 const AGENT_RESULT_TYPE_MAP: Record<string, AgentResultType> = {
   "world-state": "game_state_update",
+  "world-graph": "context_injection",
   "prose-guardian": "context_injection",
   continuity: "continuity_check",
   expression: "sprite_change",

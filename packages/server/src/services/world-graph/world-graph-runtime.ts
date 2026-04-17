@@ -22,7 +22,7 @@ export interface WorldPatchApplyResult {
 }
 
 export function createWorldGraphRuntime(): WorldGraphRuntime {
-  return new Graph<WorldNodeAttributes, WorldEdgeAttributes>({ type: "directed", multi: false });
+  return new Graph<WorldNodeAttributes, WorldEdgeAttributes>({ type: "directed", multi: true });
 }
 
 export function importWorldGraphRuntime(snapshotJson: string | null | undefined): WorldGraphRuntime {
@@ -69,7 +69,9 @@ export function findNodeKey(graph: WorldGraphRuntime, value: string, kind?: Worl
   }
 
   const needle = value.trim().toLowerCase();
-  const found = graph.findNode((_, attrs) => attrs.kind === (kind ?? attrs.kind) && attrs.name.toLowerCase() === needle);
+  const found = graph.findNode(
+    (_, attrs) => attrs.kind === (kind ?? attrs.kind) && attrs.name.toLowerCase() === needle,
+  );
   if (!found) throw new Error(`World node not found: ${value}`);
   return found;
 }
@@ -164,6 +166,14 @@ function applyOperation(graph: WorldGraphRuntime, op: WorldPatchOperation): stri
       if (op.bidirectional ?? true) dropEdges(graph, to, "connects_to", from);
       return `Disconnected ${graph.getNodeAttribute(from, "name")} from ${graph.getNodeAttribute(to, "name")}.`;
     }
+    case "placeLocation": {
+      const location = findNodeKey(graph, op.location, "location");
+      const parent = findNodeKey(graph, op.parent, "location");
+      if (location === parent) throw new Error("A location cannot contain itself");
+      dropEdges(graph, location, "in");
+      setEdge(graph, location, parent, "in", op.data ?? {});
+      return `${graph.getNodeAttribute(location, "name")} was placed inside ${graph.getNodeAttribute(parent, "name")}.`;
+    }
     case "moveCharacter": {
       const character = findNodeKey(graph, op.character, "character");
       const location = findNodeKey(graph, op.to, "location");
@@ -230,9 +240,10 @@ function updateNode(
 ) {
   const key = findNodeKey(graph, value, kind);
   const current = graph.getNodeAttributes(key);
+  const sanitized = sanitizeNodeUpdates(updates);
   graph.mergeNodeAttributes(key, {
-    ...updates,
-    data: updates.data ? { ...(current.data ?? {}), ...updates.data } : current.data,
+    ...sanitized,
+    data: sanitized.data ? { ...(current.data ?? {}), ...sanitized.data } : current.data,
   });
 }
 
@@ -244,12 +255,18 @@ function setEdge(
   data: Record<string, unknown>,
 ) {
   const key = edgeKey(source, kind, target);
-  const attributes: WorldEdgeAttributes = { kind, data };
-  if (graph.hasEdge(key)) {
-    graph.mergeEdgeAttributes(key, attributes);
-  } else {
-    graph.addDirectedEdgeWithKey(key, source, target, attributes);
+  const existing = findEdgeByKind(graph, source, target, kind);
+  if (existing) {
+    const current = graph.getEdgeAttributes(existing);
+    graph.mergeEdgeAttributes(existing, {
+      kind,
+      data: { ...(current.data ?? {}), ...data },
+    });
+    dropDuplicateKindEdges(graph, source, target, kind, existing);
+    return;
   }
+
+  graph.addDirectedEdgeWithKey(key, source, target, { kind, data });
 }
 
 function dropEdges(graph: WorldGraphRuntime, source: string, kind: WorldEdgeKind, target?: string) {
@@ -261,12 +278,7 @@ function dropEdges(graph: WorldGraphRuntime, source: string, kind: WorldEdgeKind
   }
 }
 
-function outboundNodes(
-  graph: WorldGraphRuntime,
-  source: string,
-  edgeKind: WorldEdgeKind,
-  targetKind: WorldNodeKind,
-) {
+function outboundNodes(graph: WorldGraphRuntime, source: string, edgeKind: WorldEdgeKind, targetKind: WorldNodeKind) {
   return graph
     .outEdges(source)
     .filter((edge) => graph.getEdgeAttribute(edge, "kind") === edgeKind)
@@ -275,12 +287,7 @@ function outboundNodes(
     .map((key) => nodeView(graph, key));
 }
 
-function inboundNodes(
-  graph: WorldGraphRuntime,
-  target: string,
-  edgeKind: WorldEdgeKind,
-  sourceKind: WorldNodeKind,
-) {
+function inboundNodes(graph: WorldGraphRuntime, target: string, edgeKind: WorldEdgeKind, sourceKind: WorldNodeKind) {
   return graph
     .inEdges(target)
     .filter((edge) => graph.getEdgeAttribute(edge, "kind") === edgeKind)
@@ -298,4 +305,39 @@ export function nodeView(graph: WorldGraphRuntime, key: string) {
 
 function edgeKey(source: string, kind: WorldEdgeKind, target: string) {
   return `${source}:${kind}:${target}`;
+}
+
+function findEdgeByKind(graph: WorldGraphRuntime, source: string, target: string, kind: WorldEdgeKind) {
+  return graph.outEdges(source, target).find((edge) => graph.getEdgeAttribute(edge, "kind") === kind);
+}
+
+function dropDuplicateKindEdges(
+  graph: WorldGraphRuntime,
+  source: string,
+  target: string,
+  kind: WorldEdgeKind,
+  keepEdge: string,
+) {
+  for (const edge of graph.outEdges(source, target)) {
+    if (edge === keepEdge) continue;
+    if (graph.getEdgeAttribute(edge, "kind") !== kind) continue;
+    graph.dropEdge(edge);
+  }
+}
+
+function sanitizeNodeUpdates(updates: Partial<WorldNodeAttributes> & { data?: Record<string, unknown> }) {
+  const { data, ...rest } = updates as Partial<WorldNodeAttributes> & {
+    data?: Record<string, unknown>;
+    type?: string;
+    key?: string;
+  };
+
+  const sanitized: Partial<WorldNodeAttributes> & { data?: Record<string, unknown> } = {};
+  for (const [field, value] of Object.entries(rest)) {
+    if (field === "type" || field === "key") continue;
+    if (value === undefined) continue;
+    (sanitized as Record<string, unknown>)[field] = value;
+  }
+  if (data) sanitized.data = data;
+  return sanitized;
 }

@@ -29,21 +29,61 @@ export function buildWorldObservation(
 export function buildWorldMap(graphId: string, graph: WorldGraphRuntime, characterName = "Player"): WorldMap {
   const playerKey = findOptionalNodeKey(graph, characterName, "character");
   const currentLocation = playerKey ? here(graph, playerKey) : null;
+  const currentLocationKey = currentLocation?.key ?? null;
+  const visibleLocationKeys = new Set(
+    graph.nodes().filter((key) => {
+      const attrs = graph.getNodeAttributes(key);
+      return (
+        attrs.kind === "location" && (key === currentLocationKey || attrs.revealed !== false || attrs.visited === true)
+      );
+    }),
+  );
+  const visibleNodeKeys = new Set(
+    graph.nodes().filter((key) => isNodeVisibleOnMap(graph, key, visibleLocationKeys, playerKey)),
+  );
 
   return {
     graphId,
-    nodes: graph.nodes().map((key) => nodeView(graph, key)),
-    edges: graph.edges().map((key): WorldEdgeView => {
-      return {
-        key,
-        source: graph.source(key),
-        target: graph.target(key),
-        attributes: graph.getEdgeAttributes(key),
-      };
-    }),
-    currentLocationKey: currentLocation?.key ?? null,
+    nodes: graph
+      .nodes()
+      .filter((key) => visibleNodeKeys.has(key))
+      .map((key) => nodeView(graph, key)),
+    edges: graph
+      .edges()
+      .filter((key) => visibleNodeKeys.has(graph.source(key)) && visibleNodeKeys.has(graph.target(key)))
+      .map((key): WorldEdgeView => {
+        return {
+          key,
+          source: graph.source(key),
+          target: graph.target(key),
+          attributes: graph.getEdgeAttributes(key),
+        };
+      }),
+    currentLocationKey,
     playerKey,
   };
+}
+
+function isNodeVisibleOnMap(
+  graph: WorldGraphRuntime,
+  key: string,
+  visibleLocationKeys: Set<string>,
+  playerKey: string | null,
+) {
+  const attrs = graph.getNodeAttributes(key);
+  if (attrs.kind === "location") return visibleLocationKeys.has(key);
+  if (attrs.kind === "character") {
+    if (key === playerKey) return true;
+    const atEdge = graph.findOutboundEdge(key, (_, edgeAttrs) => edgeAttrs.kind === "at");
+    return atEdge ? visibleLocationKeys.has(graph.target(atEdge)) : false;
+  }
+  if (attrs.kind === "item") {
+    const inEdge = graph.findOutboundEdge(key, (_, edgeAttrs) => edgeAttrs.kind === "in");
+    if (inEdge && visibleLocationKeys.has(graph.target(inEdge))) return true;
+    const heldEdge = graph.findOutboundEdge(key, (_, edgeAttrs) => edgeAttrs.kind === "held_by");
+    return !!heldEdge && graph.target(heldEdge) === playerKey;
+  }
+  return false;
 }
 
 function findOptionalNodeKey(graph: WorldGraphRuntime, value: string, kind: WorldNodeKind): string | null {
@@ -54,7 +94,12 @@ function findOptionalNodeKey(graph: WorldGraphRuntime, value: string, kind: Worl
   }
 }
 
-function inboundNodeViews(graph: WorldGraphRuntime, target: string, edgeKind: WorldEdgeKind, sourceKind: WorldNodeKind) {
+function inboundNodeViews(
+  graph: WorldGraphRuntime,
+  target: string,
+  edgeKind: WorldEdgeKind,
+  sourceKind: WorldNodeKind,
+) {
   return graph
     .inEdges(target)
     .filter((edge) => graph.getEdgeAttribute(edge, "kind") === edgeKind)
@@ -74,5 +119,9 @@ function outboundNodeViews(
     .filter((edge) => graph.getEdgeAttribute(edge, "kind") === edgeKind)
     .map((edge) => graph.target(edge))
     .filter((key) => graph.getNodeAttribute(key, "kind") === targetKind)
+    .filter((key) => {
+      const attrs = graph.getNodeAttributes(key);
+      return attrs.kind !== "location" || attrs.revealed !== false || attrs.visited === true;
+    })
     .map((key) => nodeView(graph, key));
 }

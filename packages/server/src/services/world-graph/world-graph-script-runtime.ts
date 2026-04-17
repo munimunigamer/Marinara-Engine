@@ -191,6 +191,41 @@ function executeWorldFunction(
         data: isPlainRecord(optionsArg.data) ? optionsArg.data : undefined,
       });
     }
+    case "connectLocations": {
+      const input = objectArg(args, 0);
+      return applyScriptOp(graph, ops, events, options, {
+        type: "connectLocations",
+        from: stringField(input, "from"),
+        to: stringField(input, "to"),
+        bidirectional: typeof input.bidirectional === "boolean" ? input.bidirectional : undefined,
+        data: {
+          ...(stringField(input, "label", true) ? { label: stringField(input, "label", true) } : {}),
+          ...(stringField(input, "description", true) ? { description: stringField(input, "description", true) } : {}),
+          ...(stringField(input, "direction", true) ? { direction: stringField(input, "direction", true) } : {}),
+          ...(stringField(input, "type", true) ? { type: stringField(input, "type", true) } : {}),
+          ...(typeof input.hidden === "boolean" ? { hidden: input.hidden } : {}),
+          ...(isPlainRecord(input.data) ? input.data : {}),
+        },
+      });
+    }
+    case "placeLocation": {
+      const input = objectArg(args, 0);
+      return applyScriptOp(graph, ops, events, options, {
+        type: "placeLocation",
+        location: stringField(input, "location"),
+        parent: stringField(input, "parent"),
+        data: {
+          ...(stringField(input, "label", true) ? { label: stringField(input, "label", true) } : {}),
+          ...(stringField(input, "description", true) ? { description: stringField(input, "description", true) } : {}),
+          ...(stringField(input, "type", true) ? { type: stringField(input, "type", true) } : {}),
+          ...(isPlainRecord(input.data) ? input.data : {}),
+        },
+      });
+    }
+    case "reveal":
+      return applyScriptOp(graph, ops, events, options, { type: "revealLocation", location: stringArg(args, 0) });
+    case "visit":
+      return applyScriptOp(graph, ops, events, options, { type: "visitLocation", location: stringArg(args, 0) });
     default:
       throw new Error(`Unknown world function: ${name}`);
   }
@@ -317,6 +352,13 @@ function objectArg(args: unknown[], index: number) {
   return isPlainRecord(value) ? value : {};
 }
 
+function stringField(input: Record<string, unknown>, field: string, optional?: boolean) {
+  const value = input[field];
+  if (typeof value === "string" && value.trim()) return value;
+  if (optional) return "";
+  throw new Error(`Expected string field "${field}"`);
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -348,4 +390,8 @@ function createLocation(input) { return __callWorld("createLocation", [input]); 
 function createItem(input) { return __callWorld("createItem", [input]); }
 function createCharacter(input) { return __callWorld("createCharacter", [input]); }
 function connect(fromLocation, toLocation, options) { return __callWorld("connect", [fromLocation, toLocation, options]); }
+function connectLocations(input) { return __callWorld("connectLocations", [input]); }
+function placeLocation(input) { return __callWorld("placeLocation", [input]); }
+function reveal(locationName) { return __callWorld("reveal", [locationName]); }
+function visit(locationName) { return __callWorld("visit", [locationName]); }
 `;

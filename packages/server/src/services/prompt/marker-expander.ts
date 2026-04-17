@@ -356,6 +356,7 @@ async function expandAgentData(config: MarkerConfig, ctx: MarkerContext): Promis
   // configuration. Skip them here to avoid duplicate data.
   const AUTO_INJECTED_TRACKERS = new Set([
     "world-state",
+    "world-graph",
     "quest",
     "character-tracker",
     "persona-stats",

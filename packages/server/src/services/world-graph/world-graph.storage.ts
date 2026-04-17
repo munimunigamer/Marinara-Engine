@@ -85,6 +85,7 @@ export interface WorldGraphStorage {
   getCurrentGraphForChat(chatId: string): Promise<CurrentWorldGraph>;
   savePatch(input: SavePatchInput): Promise<WorldPatchRecord>;
   runPatch(input: RunPatchInput): Promise<RunWorldPatchResult>;
+  replaceForChat(input: RunPatchInput): Promise<RunWorldPatchResult>;
   rebuildGraph(graphId: string): Promise<CurrentWorldGraph>;
   rebuildForChat(chatId: string): Promise<CurrentWorldGraph>;
   saveSnapshot(graphId: string, runtime: WorldGraphRuntime): Promise<void>;
@@ -190,6 +191,43 @@ export function createWorldGraphStorage(db: DB): WorldGraphStorage {
         graph: current.graph,
         runtime: applied.graph,
         events: [...current.events, ...applied.events],
+        patch,
+        patchRecord,
+        applied: input.apply,
+      };
+    },
+
+    async replaceForChat(input: RunPatchInput): Promise<RunWorldPatchResult> {
+      const graph = await this.getOrCreateGraphForChat(input.chatId);
+      const runtime = createWorldGraphRuntime();
+      const applied = applyWorldPatch(runtime, input.patch);
+      const patch: WorldGraphPatch = {
+        ...input.patch,
+        events: applied.events,
+      };
+
+      let patchRecord: WorldPatchRecord | null = null;
+      if (input.apply) {
+        await db.delete(worldPatches).where(eq(worldPatches.graphId, graph.id));
+        patchRecord = await this.savePatch({
+          graphId: graph.id,
+          chatId: input.chatId,
+          sourceRole: input.sourceRole ?? "ingest",
+          sourcePhase: input.sourcePhase ?? "ingest",
+          messageId: input.messageId ?? null,
+          swipeIndex: input.swipeIndex ?? null,
+          status: "committed",
+          code: input.code ?? null,
+          patch,
+          result: input.patch.result ?? null,
+        });
+        await this.saveSnapshot(graph.id, applied.graph);
+      }
+
+      return {
+        graph,
+        runtime: applied.graph,
+        events: applied.events,
         patch,
         patchRecord,
         applied: input.apply,

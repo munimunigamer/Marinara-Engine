@@ -1,24 +1,28 @@
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import {
   Suspense,
   lazy,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
   type ReactNode,
   type RefObject,
 } from "react";
-import { type SpritePlacement, type SpriteSide } from "@marinara-engine/shared";
+import { type SpritePlacement, type SpriteSide, type WorldMap } from "@marinara-engine/shared";
 import {
   FolderOpen,
   Globe,
   Image,
   Loader2,
+  Map as MapIcon,
   MoreHorizontal,
   Move,
   PenLine,
+  RefreshCw,
   ScrollText,
   Settings2,
   Swords,
@@ -31,12 +35,19 @@ import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useGameStateStore } from "../../stores/game-state.store";
 import { useActiveLorebookEntries } from "../../hooks/use-lorebooks";
+import { useSyncWorldGraphLorebooks, useWorldGraphMap, useWorldGraphObservation } from "../../hooks/use-world-graph";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { CyoaChoices } from "./CyoaChoices";
 import { EndSceneBar } from "./SceneBanner";
 import { ChatCommonOverlays } from "./ChatCommonOverlays";
-import type { CharacterMap, MessageSelectionToggle, MessageWithSwipes, PeekPromptData, PersonaInfo } from "./chat-area.types";
+import type {
+  CharacterMap,
+  MessageSelectionToggle,
+  MessageWithSwipes,
+  PeekPromptData,
+  PersonaInfo,
+} from "./chat-area.types";
 
 type ChatData = ComponentProps<typeof ChatCommonOverlays>["chat"];
 
@@ -531,6 +542,161 @@ function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMe
   );
 }
 
+function FloatingWorldGraphWidget({ chatId }: { chatId: string }) {
+  const { data: map, isLoading } = useWorldGraphMap(chatId);
+  const { data: observation } = useWorldGraphObservation(chatId);
+  const syncLorebooks = useSyncWorldGraphLorebooks(chatId);
+  const points = useMemo(() => getWorldMapPoints(map), [map]);
+  const edges = useMemo(() => getWorldMapEdges(map, points), [map, points]);
+  const currentLocation = observation?.currentLocation?.attributes.name ?? "Unknown";
+  const exits = observation?.exits ?? [];
+  const hasLocations = points.length > 0;
+  const isSyncing = syncLorebooks.isPending;
+
+  return (
+    <aside
+      className="pointer-events-none absolute right-4 top-16 z-30 flex h-48 w-48 flex-col overflow-hidden rounded-lg border border-white/15 bg-black/45 text-white shadow-xl shadow-black/30 backdrop-blur-md max-md:right-2 max-md:top-14 max-md:h-32 max-md:w-32"
+      aria-label="World Graph minimap"
+    >
+      <div className="flex h-7 shrink-0 items-center justify-between border-b border-white/10 px-2 max-md:h-6">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <MapIcon size="0.8125rem" className="shrink-0 text-lime-300" />
+          <span className="truncate text-[0.625rem] font-semibold uppercase tracking-wide text-white/70">World</span>
+        </div>
+        <button
+          type="button"
+          className="pointer-events-auto inline-flex h-5 w-5 items-center justify-center rounded border border-white/10 bg-white/5 text-white/45 transition hover:border-lime-300/50 hover:text-lime-200 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => {
+            const toastId = toast.loading("Syncing lorebooks to world graph...");
+            syncLorebooks.mutate(undefined, {
+              onSuccess: (data) => {
+                toast.success(`World graph synced (${data.stats.operationCount} operations)`, { id: toastId });
+              },
+              onError: (error) => {
+                toast.error(error instanceof Error ? error.message : "World graph sync failed", {
+                  id: toastId,
+                  duration: 15000,
+                });
+              },
+            });
+          }}
+          disabled={isSyncing}
+          title={syncLorebooks.error instanceof Error ? syncLorebooks.error.message : "Sync lorebooks"}
+          aria-label="Sync lorebooks to world graph"
+        >
+          {isLoading || isSyncing ? (
+            <Loader2 size="0.6875rem" className="animate-spin" />
+          ) : (
+            <RefreshCw size="0.6875rem" />
+          )}
+        </button>
+      </div>
+
+      <div className="relative min-h-0 flex-1 border-b border-white/10 bg-emerald-950/20">
+        {hasLocations ? (
+          <svg viewBox="0 0 100 100" className="h-full w-full">
+            <defs>
+              <radialGradient id="world-graph-current" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#bef264" stopOpacity="0.9" />
+                <stop offset="100%" stopColor="#65a30d" stopOpacity="0.15" />
+              </radialGradient>
+            </defs>
+            {edges.map((edge) => (
+              <line
+                key={edge.key}
+                x1={edge.source.x}
+                y1={edge.source.y}
+                x2={edge.target.x}
+                y2={edge.target.y}
+                stroke={edge.kind === "in" ? "rgba(190,242,100,0.18)" : "rgba(255,255,255,0.24)"}
+                strokeWidth={edge.kind === "in" ? "1" : "1.5"}
+                strokeLinecap="round"
+                strokeDasharray={edge.kind === "in" ? "2 2" : undefined}
+              />
+            ))}
+            {points.map((point) => (
+              <g key={point.key}>
+                {point.current && <circle cx={point.x} cy={point.y} r="11" fill="url(#world-graph-current)" />}
+                <circle
+                  cx={point.x}
+                  cy={point.y}
+                  r={point.current ? 4.5 : 3.25}
+                  fill={point.current ? "#bef264" : "#d1d5db"}
+                  stroke="rgba(0,0,0,0.55)"
+                  strokeWidth="1"
+                />
+              </g>
+            ))}
+          </svg>
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-1 text-center text-white/35">
+            <MapIcon size="1.25rem" />
+            <span className="text-[0.625rem]">No map yet</span>
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 space-y-1 px-2 py-1.5 max-md:py-1">
+        <div className="truncate text-[0.6875rem] font-medium text-lime-200">{currentLocation}</div>
+        <div className="truncate text-[0.5625rem] text-white/45 max-md:hidden">
+          {exits.length > 0 ? `Exits: ${exits.map((exit) => exit.attributes.name).join(", ")}` : "No exits visible"}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function getWorldMapPoints(map?: WorldMap) {
+  const locations = (map?.nodes ?? []).filter((node) => node.attributes.kind === "location");
+  if (locations.length === 0) return [];
+
+  const hasCoordinates = locations.some(
+    (node) => typeof node.attributes.x === "number" || typeof node.attributes.y === "number",
+  );
+  const raw = locations.map((node, index) => {
+    const angle = (index / Math.max(1, locations.length)) * Math.PI * 2 - Math.PI / 2;
+    return {
+      key: node.key,
+      name: node.attributes.name,
+      current: node.key === map?.currentLocationKey,
+      rawX: hasCoordinates && typeof node.attributes.x === "number" ? node.attributes.x : Math.cos(angle) * 40,
+      rawY: hasCoordinates && typeof node.attributes.y === "number" ? node.attributes.y : Math.sin(angle) * 40,
+    };
+  });
+
+  const xs = raw.map((point) => point.rawX);
+  const ys = raw.map((point) => point.rawY);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+
+  return raw.map((point) => ({
+    ...point,
+    x: 14 + ((point.rawX - minX) / spanX) * 72,
+    y: 14 + ((point.rawY - minY) / spanY) * 72,
+  }));
+}
+
+function getWorldMapEdges(map: WorldMap | undefined, points: ReturnType<typeof getWorldMapPoints>) {
+  const pointByKey = new Map(points.map((point) => [point.key, point]));
+  return (map?.edges ?? [])
+    .filter(
+      (edge) =>
+        (edge.attributes.kind === "connects_to" || edge.attributes.kind === "in") &&
+        pointByKey.has(edge.source) &&
+        pointByKey.has(edge.target),
+    )
+    .map((edge) => ({
+      key: edge.key,
+      kind: edge.attributes.kind,
+      source: pointByKey.get(edge.source)!,
+      target: pointByKey.get(edge.target)!,
+    }));
+}
+
 type RoleplaySurfaceProps = {
   activeChatId: string;
   chat: ChatData | null | undefined;
@@ -701,6 +867,7 @@ export function ChatRoleplaySurface({
   isGrouped,
 }: RoleplaySurfaceProps) {
   const linkedChatName = chat?.connectedChatId ? allChats?.find((c) => c.id === chat.connectedChatId)?.name : undefined;
+  const showWorldGraphHud = !!(chat && chatMeta.enableAgents && enabledAgentTypes.has("world-graph"));
 
   return (
     <div data-component="ChatArea.Roleplay" className="flex flex-1 overflow-hidden">
@@ -709,6 +876,7 @@ export function ChatRoleplaySurface({
         <div className="rpg-overlay absolute inset-0" />
         <div className="rpg-vignette pointer-events-none absolute inset-0" />
         {weatherEffects && <WeatherEffectsConnected />}
+        {showWorldGraphHud && <FloatingWorldGraphWidget chatId={chat.id} />}
         {expressionAgentEnabled && spriteCharacterIds.length > 0 && (
           <Suspense fallback={null}>
             <SpriteOverlay
