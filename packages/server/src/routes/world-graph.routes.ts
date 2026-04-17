@@ -8,6 +8,7 @@ import { createWorldGraphLifecycle } from "../services/world-graph/world-graph-l
 import { createWorldGraphTools } from "../services/world-graph/world-graph-tools.js";
 import { buildWorldMap, buildWorldObservation } from "../services/world-graph/world-graph-retrieval.js";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
+import { runWorldGraphScript } from "../services/world-graph/world-graph-script-runtime.js";
 
 export async function worldGraphRoutes(app: FastifyInstance) {
   const storage = createWorldGraphStorage(app.db);
@@ -30,10 +31,17 @@ export async function worldGraphRoutes(app: FastifyInstance) {
   app.post<{ Params: { chatId: string } }>("/:chatId/run", async (req, reply) => {
     if (!(await chats.getById(req.params.chatId))) return reply.status(404).send({ error: "Chat not found" });
     const input = worldRunRequestSchema.parse(req.body);
-    const patchResult = resolvePatchInput(input.patch, input.code);
-    if (!patchResult.ok) {
-      return reply.status(400).send({ error: patchResult.error });
+    let patchResult:
+      | Awaited<ReturnType<typeof resolveScriptInput>>
+      | { patch: ReturnType<typeof worldGraphPatchSchema.parse>; scriptResult: undefined };
+    try {
+      patchResult = input.patch
+        ? { patch: worldGraphPatchSchema.parse(input.patch), scriptResult: undefined }
+        : await resolveScriptInput(req.params.chatId, input.code);
+    } catch (error) {
+      return reply.status(400).send({ error: error instanceof Error ? error.message : "World script failed" });
     }
+    if (!patchResult) return reply.status(400).send({ error: "Provide a world graph patch or world script code." });
 
     const result = await tools.runPatch({
       chatId: req.params.chatId,
@@ -53,6 +61,7 @@ export async function worldGraphRoutes(app: FastifyInstance) {
       patchRecord: result.patchRecord,
       observation: buildWorldObservation(result.graph.id, result.runtime, result.events),
       map: buildWorldMap(result.graph.id, result.runtime),
+      scriptResult: patchResult.scriptResult,
     };
   });
 
@@ -74,34 +83,17 @@ export async function worldGraphRoutes(app: FastifyInstance) {
       map: buildWorldMap(graph.id, runtime),
     };
   });
-}
 
-function resolvePatchInput(
-  patch: unknown,
-  code: string | undefined,
-):
-  | { ok: true; patch: ReturnType<typeof worldGraphPatchSchema.parse> }
-  | {
-      ok: false;
-      error: string;
-    } {
-  if (patch) {
-    return { ok: true, patch: worldGraphPatchSchema.parse(patch) };
-  }
+  async function resolveScriptInput(chatId: string, code: string | undefined) {
+    if (!code?.trim()) {
+      return null;
+    }
 
-  if (!code?.trim()) {
-    return { ok: false, error: "Provide a world graph patch. JavaScript DSL execution is planned for phase 2." };
-  }
-
-  try {
-    const parsed = JSON.parse(code);
-    const candidate = parsed.patch ?? parsed;
-    return { ok: true, patch: worldGraphPatchSchema.parse(candidate) };
-  } catch {
+    const current = await storage.getCurrentGraphForChat(chatId);
+    const scriptResult = await runWorldGraphScript(current.graph.id, current.runtime, code);
     return {
-      ok: false,
-      error:
-        "Phase 1 only accepts JSON patch input in code. JavaScript DSL execution will be added with the QuickJS runtime in phase 2.",
+      patch: scriptResult.patch,
+      scriptResult: scriptResult.scriptResult,
     };
   }
 }
