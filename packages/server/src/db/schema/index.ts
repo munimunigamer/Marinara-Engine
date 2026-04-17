@@ -14,3 +14,4 @@ export * from "./regex-scripts.js";
 export * from "./gallery.js";
 export * from "./themes.js";
 export * from "./app-settings.js";
+export * from "./world-graph.js";

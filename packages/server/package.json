@@ -28,6 +28,8 @@
     "dotenv": "^16.4.0",
     "drizzle-orm": "^0.38.0",
     "fastify": "^5.2.0",
+    "graphology": "^0.26.0",
+    "graphology-shortest-path": "^2.1.0",
     "nanoid": "^5.1.0",
     "pdf-parse": "^2.4.5",
     "pino": "^9.6.0",

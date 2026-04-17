@@ -18,6 +18,7 @@ export * from "./types/regex.js";
 export * from "./types/export.js";
 export * from "./types/haptic.js";
 export * from "./types/theme.js";
+export * from "./types/world-graph.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
@@ -30,6 +31,7 @@ export * from "./schemas/custom-tool.schema.js";
 export * from "./schemas/regex.schema.js";
 export * from "./schemas/theme.schema.js";
 export * from "./schemas/app-settings.schema.js";
+export * from "./schemas/world-graph.schema.js";
 
 // Constants
 export * from "./constants/providers.js";

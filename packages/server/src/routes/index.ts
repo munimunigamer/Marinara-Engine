@@ -40,6 +40,7 @@ import { chatFoldersRoutes } from "./chat-folders.routes.js";
 import { updatesRoutes } from "./updates.routes.js";
 import { themesRoutes } from "./themes.routes.js";
 import { appSettingsRoutes } from "./app-settings.routes.js";
+import { worldGraphRoutes } from "./world-graph.routes.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await app.register(chatsRoutes, { prefix: "/api/chats" });
@@ -80,4 +81,5 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(updatesRoutes, { prefix: "/api/updates" });
   await app.register(themesRoutes, { prefix: "/api/themes" });
   await app.register(appSettingsRoutes, { prefix: "/api/app-settings" });
+  await app.register(worldGraphRoutes, { prefix: "/api/world-graph" });
 }
