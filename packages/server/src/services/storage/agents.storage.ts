@@ -5,7 +5,7 @@ import { eq, and, desc } from "drizzle-orm";
 import type { DB } from "../../db/connection.js";
 import { agentConfigs, agentRuns, agentMemory } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
-import type { CreateAgentConfigInput, AgentResult } from "@marinara-engine/shared";
+import type { CreateAgentConfigInput, AgentResult, BuiltInAgentMeta } from "@marinara-engine/shared";
 
 export function createAgentsStorage(db: DB) {
   return {
@@ -51,6 +51,22 @@ export function createAgentsStorage(db: DB) {
         updatedAt: timestamp,
       });
       return this.getById(id);
+    },
+
+    async ensureBuiltInConfig(builtIn: BuiltInAgentMeta) {
+      const existing = await this.getByType(builtIn.id);
+      if (existing) return existing;
+
+      return this.create({
+        type: builtIn.id,
+        name: builtIn.name,
+        description: builtIn.description,
+        phase: builtIn.phase,
+        enabled: builtIn.enabledByDefault,
+        connectionId: null,
+        promptTemplate: "",
+        settings: builtIn.defaultInjectAsSection ? { injectAsSection: true } : {},
+      });
     },
 
     async update(id: string, data: Partial<CreateAgentConfigInput>) {

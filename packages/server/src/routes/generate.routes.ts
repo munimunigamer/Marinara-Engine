@@ -1806,16 +1806,19 @@ export async function generateRoutes(app: FastifyInstance) {
             })
           : [];
       for (const builtIn of builtInFallbacks) {
+        const cfg = await agentsStore.ensureBuiltInConfig(builtIn);
+        if (!cfg) continue;
+        const settings = cfg.settings ? JSON.parse(cfg.settings as string) : {};
         // Built-in agents also respect the default-for-agents connection
         const builtInCached = defaultAgentConn ? agentProviderCache.get(defaultAgentConn.id) : null;
         resolvedAgents.push({
-          id: `builtin:${builtIn.id}`,
-          type: builtIn.id,
-          name: builtIn.name,
-          phase: builtIn.phase,
-          promptTemplate: "",
-          connectionId: defaultAgentConn?.id ?? null,
-          settings: {},
+          id: cfg.id,
+          type: cfg.type,
+          name: cfg.name,
+          phase: cfg.phase as string,
+          promptTemplate: cfg.promptTemplate as string,
+          connectionId: (cfg.connectionId as string | null) ?? defaultAgentConn?.id ?? null,
+          settings,
           provider: builtInCached?.provider ?? provider,
           model: builtInCached?.model ?? conn.model,
         });
