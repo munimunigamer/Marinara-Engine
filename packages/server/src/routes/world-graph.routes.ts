@@ -3,7 +3,12 @@
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { resolveWorldGraphSyncSettings, worldRunRequestSchema, worldGraphPatchSchema } from "@marinara-engine/shared";
+import {
+  resolveWorldGraphSyncSettings,
+  WORLD_GRAPH_SYNC_SCENE_MESSAGE_COUNT,
+  worldRunRequestSchema,
+  worldGraphPatchSchema,
+} from "@marinara-engine/shared";
 import { createWorldGraphStorage } from "../services/world-graph/world-graph.storage.js";
 import { createWorldGraphLifecycle } from "../services/world-graph/world-graph-lifecycle.js";
 import { createWorldGraphTools } from "../services/world-graph/world-graph-tools.js";
@@ -13,6 +18,7 @@ import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
+import { createGameStateStorage } from "../services/storage/game-state.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { ensureWorldGraphPlayer } from "../services/world-graph/world-graph-bootstrap.js";
 import { buildWorldGraphPatchFromLorebooks } from "../services/world-graph/world-graph-lorebook-sync.js";
@@ -32,6 +38,7 @@ export async function worldGraphRoutes(app: FastifyInstance) {
   const characters = createCharactersStorage(app.db);
   const connections = createConnectionsStorage(app.db);
   const agents = createAgentsStorage(app.db);
+  const gameStateStore = createGameStateStorage(app.db);
 
   app.get<{ Params: { chatId: string } }>("/:chatId/observe", async (req, reply) => {
     if (!(await chats.getById(req.params.chatId))) return reply.status(404).send({ error: "Chat not found" });
@@ -110,7 +117,7 @@ export async function worldGraphRoutes(app: FastifyInstance) {
     }
 
     const relevantLorebooks = await getRelevantLorebooks(chat);
-    const scene = await buildSceneContext(chat, syncSettings.syncSceneMessageCount);
+    const scene = await buildSceneContext(chat, WORLD_GRAPH_SYNC_SCENE_MESSAGE_COUNT);
     const provider = createLLMProvider(connection.conn.provider, connection.baseUrl, connection.conn.apiKey);
 
     let syncResult: Awaited<ReturnType<typeof buildWorldGraphPatchFromLorebooks>>;
@@ -188,14 +195,30 @@ export async function worldGraphRoutes(app: FastifyInstance) {
   ) {
     const defaultAgentConn = await connections.getDefaultForAgents();
     let requestedId = connectionId ?? agentConnectionId ?? defaultAgentConn?.id ?? chatConnectionId ?? undefined;
+    let source: "request" | "agent" | "default_agent" | "chat" | "default" =
+      connectionId != null
+        ? "request"
+        : agentConnectionId != null
+          ? "agent"
+          : defaultAgentConn?.id != null
+            ? "default_agent"
+            : chatConnectionId != null
+              ? "chat"
+              : "default";
     if (requestedId === "random") {
       const pool = await connections.listRandomPool();
       requestedId = pool.length ? pool[Math.floor(Math.random() * pool.length)]!.id : undefined;
     }
     let conn = requestedId ? await connections.getWithKey(requestedId) : null;
-    conn ??= defaultAgentConn;
+    if (!conn && defaultAgentConn) {
+      conn = defaultAgentConn;
+      source = "default_agent";
+    }
     const defaultConn = conn ? null : await connections.getDefault();
-    conn ??= defaultConn ? await connections.getWithKey(defaultConn.id) : null;
+    if (!conn && defaultConn) {
+      conn = await connections.getWithKey(defaultConn.id);
+      source = "default";
+    }
     if (!conn) return null;
 
     let baseUrl = conn.baseUrl;
@@ -205,7 +228,7 @@ export async function worldGraphRoutes(app: FastifyInstance) {
       baseUrl = providerDef?.defaultBaseUrl ?? "";
     }
     if (!baseUrl) return null;
-    return { conn, baseUrl };
+    return { conn, baseUrl, source };
   }
 
   async function getRelevantLorebooks(chat: Awaited<ReturnType<typeof chats.getById>>) {
@@ -236,12 +259,15 @@ export async function worldGraphRoutes(app: FastifyInstance) {
     const metadata = parseJsonRecord(chat?.metadata);
     const characterIds = parseStringArray(chat?.characterIds);
     const characterNames: string[] = [];
+    const characterNameById = new Map<string, string>();
     for (const characterId of characterIds) {
       const row = await characters.getById(characterId);
       if (!row) continue;
       const data = parseJsonRecord(row.data);
       const name = typeof data.name === "string" ? data.name.trim() : "";
-      if (name) characterNames.push(name);
+      if (!name) continue;
+      characterNames.push(name);
+      characterNameById.set(characterId, name);
     }
 
     let personaName = "Player";
@@ -255,16 +281,39 @@ export async function worldGraphRoutes(app: FastifyInstance) {
     const messages = chat ? await chats.listMessages(chat.id) : [];
     const recentMessages = messages.slice(-recentMessageCount).map((message: any) => ({
       role: String(message.role ?? "message"),
+      name: resolveMessageSpeakerName(message, personaName, characterNameById),
       content: String(message.content ?? ""),
     }));
+    const latestGameState = chat
+      ? (await gameStateStore.getLatestCommitted(chat.id)) ?? (await gameStateStore.getLatest(chat.id))
+      : null;
 
     return {
       characterNames,
       personaName,
       personaDescription,
+      currentLocation: latestGameState?.location ? String(latestGameState.location) : null,
       recentMessages,
       summary: typeof metadata.summary === "string" ? metadata.summary : null,
     };
+  }
+
+  function resolveMessageSpeakerName(
+    message: { role?: unknown; characterId?: unknown },
+    personaName: string,
+    characterNameById: Map<string, string>,
+  ) {
+    const characterId = typeof message.characterId === "string" ? message.characterId : "";
+    if (characterId && characterNameById.has(characterId)) {
+      return characterNameById.get(characterId);
+    }
+
+    const role = typeof message.role === "string" ? message.role : "";
+    if (role === "user") return personaName;
+    if (role === "assistant") return "Assistant";
+    if (role === "narrator") return "Narrator";
+    if (role === "system") return "System";
+    return role || undefined;
   }
 
   function buildPersonaSummary(

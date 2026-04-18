@@ -1,10 +1,16 @@
 // ──────────────────────────────────────────────
-// World Graph Lorebook Sync (CodeAct via QuickJS DSL)
+// World Graph Lorebook Sync (Structured Incremental Fold)
 // ──────────────────────────────────────────────
 import type { BaseLLMProvider } from "../llm/base-provider.js";
 import type { Lorebook, LorebookEntry, WorldGraphPatch, WorldGraphSyncSettings } from "@marinara-engine/shared";
+import {
+  WORLD_GRAPH_SYNC_MAX_CHUNK_REPAIR_ATTEMPTS,
+  WORLD_GRAPH_SYNC_MAX_FINAL_REPAIR_ATTEMPTS,
+  WORLD_GRAPH_SYNC_PREVIEW_CHARS,
+} from "@marinara-engine/shared";
 import { applyWorldPatch, createWorldGraphRuntime, type WorldGraphRuntime } from "./world-graph-runtime.js";
 import { runWorldGraphScript } from "./world-graph-script-runtime.js";
+import { reviewWorldGraphTopology } from "./world-graph-topology.js";
 
 type LorebookWithEntries = Lorebook & { entries: LorebookEntry[] };
 
@@ -12,6 +18,7 @@ interface SceneContext {
   characterNames: string[];
   personaName: string;
   personaDescription?: string | null;
+  currentLocation?: string | null;
   recentMessages: Array<{ role: string; name?: string; content: string }>;
   summary?: string | null;
 }
@@ -24,164 +31,184 @@ interface BuildLorebookGraphInput {
   settings: WorldGraphSyncSettings;
 }
 
-const MAX_MANIFEST_CHARS = 18_000;
-const MAX_DIGEST_CHARS = 14_000;
-const MAX_FINAL_SCRIPT_CHARS = 80_000;
+interface StructuredPatchRequestInput {
+  provider: BaseLLMProvider;
+  model: string;
+  runtime: WorldGraphRuntime;
+  stageLabel: string;
+  userPrompt: string;
+  maxRepairAttempts: number;
+}
+
+interface StructuredPatchResult {
+  patch: WorldGraphPatch;
+  repairAttempts: number;
+}
+
+const MAX_STATE_DIGEST_CHARS = 14_000;
+const MAX_VALIDATION_ERROR_CHARS = 2_000;
+
+const QUICKJS_WORLD_DSL_REFERENCE = `QuickJS world DSL reference:
+
+The code string is executed in QuickJS as plain JavaScript.
+Allowed:
+- simple statements
+- const / let
+- if / else
+- arrays and object literals
+
+Do not use:
+- TypeScript types
+- import / export
+- classes
+- async / await
+- external libraries
+- eval / Function / process / globalThis
+- helper function declarations unless absolutely necessary
+
+Readable helper functions available:
+- here(characterName)
+- observe(characterName)
+- inventory(characterName)
+- search(query, { types?: ["location" | "character" | "item"], limit?: number })
+- findLocation(nameOrKey)
+- findItem(nameOrKey)
+- findCharacter(nameOrKey)
+- path(fromLocation, toLocation)
+- canMove(characterName, locationName)
+- explore(locationName)
+- explorePath(locationNames)
+
+Mutation functions available:
+- createLocation({ key?, name, description?, lorebookEntryId? })
+- createCharacter({ key?, name, description?, lorebookEntryId?, aliases?, isPlayer?, personaId? })
+- createItem({ key?, name, description?, lorebookEntryId? })
+- connectLocations({ from, to, oneWay? })
+- placeLocation({ location, parent })
+- move(characterNameOrKey, locationNameOrKey)
+- place(itemNameOrKey, locationNameOrKey)
+- take(characterNameOrKey, itemNameOrKey)
+- drop(characterNameOrKey, itemNameOrKey)
+- reveal(locationNameOrKey)
+- visit(locationNameOrKey)
+
+Preferred patterns:
+- Upsert player:
+  createCharacter({ key: "player", name: "...", description: "..." });
+- Upsert an existing location:
+  createLocation({ key: "...", name: "...", description: "..." });
+- Place a child location:
+  placeLocation({ location: "...", parent: "..." });
+- Move the player:
+  move("player", "...");`;
+
+const STRUCTURED_WORLD_GRAPH_SYSTEM_PROMPT = `You incrementally build a roleplay world graph from lorebook chunks.
+
+Return raw JSON only with this shape: { "code": "..." }.
+- Do not return prose explanations.
+- Do not return markdown fences.
+- The code field must contain QuickJS-compatible world DSL.
+
+Core rules:
+- Treat the current world state as canon unless the new chunk clearly adds or refines it.
+- Never split or reinterpret entities across multiple ids when an existing id clearly matches.
+- When referencing existing nodes, use the exact ids from the current world state digest.
+- When a node comes directly from a lorebook entry, set lorebookEntryId to that entry's id.
+- Create nodes before operations that reference them.
+- Prefer updating existing nodes instead of creating near-duplicates.
+- Use connectLocations only for traversable travel routes.
+- Use placeLocation for containment or hierarchy: room in building, island in sea, district in city, region in country.
+- Containment is already traversable through recursive parent/child movement. Do not add duplicate connectLocations edges just because one location is inside another.
+- Use the tracked current location and recent messages to decide where the player, present characters, and scene items belong.
+- Every character must end up in exactly one location.
+- Every item must end up either in exactly one location or held by exactly one character.
+- Keep descriptions concise and factual.
+- Be conservative. If the chunk does not justify a mutation, return { "code": "" }.
+
+${QUICKJS_WORLD_DSL_REFERENCE}
+
+Examples:
+{ "code": "createLocation({ key: \\"...\\", name: \\"...\\" });\\nplaceLocation({ location: \\"...\\", parent: \\"...\\" });" }
+{ "code": "createCharacter({ key: \\"player\\", name: \\"...\\", description: \\"...\\" });\\nmove(\\"player\\", \\"...\\");\\nreveal(\\"...\\");" }`;
 
 export async function buildWorldGraphPatchFromLorebooks(input: BuildLorebookGraphInput) {
   const entries = input.lorebooks.flatMap((book) => book.entries.map((entry) => ({ book, entry })));
-  const manifest = buildEntryManifest(entries, input.settings).slice(0, MAX_MANIFEST_CHARS);
-  const chunks = chunkEntries(entries, input.settings);
-  const draftScripts: string[] = [];
-  const draftRuntime = createWorldGraphRuntime();
-  let graphDigest = "No graph operations have been drafted yet.";
-
+  const chunks = chunkEntries(entries, input.settings.syncChunkCharLimit);
   const effectiveChunks = chunks.length > 0 ? chunks : [[]];
-  for (let index = 0; index < effectiveChunks.length; index++) {
-    const batch = effectiveChunks[index] ?? [];
-    const raw = await input.provider.chatComplete(
-      [
-        { role: "system", content: CODEACT_SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: [
-            `Write world graph DSL code for lorebook batch ${index + 1}/${effectiveChunks.length}.`,
-            ``,
-            `<current_scene_context>`,
-            formatSceneContext(input.scene),
-            `</current_scene_context>`,
-            ``,
-            `<all_lorebook_entry_manifest>`,
-            manifest || "(No lorebook entries are attached. Create a minimal scene graph from current context.)",
-            `</all_lorebook_entry_manifest>`,
-            ``,
-            `<graph_so_far>`,
-            graphDigest,
-            `</graph_so_far>`,
-            ``,
-            `<entries_to_review_in_this_batch>`,
-            formatEntries(batch, input.settings) || "(No lorebook entries in this batch.)",
-            `</entries_to_review_in_this_batch>`,
-          ].join("\n"),
-        },
-      ],
-      { model: input.model, temperature: 0.2, maxTokens: 8192 },
-    );
+  const runtime = createWorldGraphRuntime();
+  const aggregateOps: WorldGraphPatch["ops"] = [];
+  let totalRepairAttempts = 0;
 
-    const script = extractWorldScript(raw.content ?? "");
-    if (script) {
-      try {
-        const validatedDraft = await validateWorldGraphScriptWithRetries({
-          provider: input.provider,
-          model: input.model,
-          scene: input.scene,
-          runtime: draftRuntime,
-          script,
-          graphId: "draft",
-          stageLabel: `draft batch ${index + 1}/${effectiveChunks.length}`,
-          maxRepairAttempts: input.settings.syncValidateDraftChunks ? input.settings.syncMaxDraftRepairAttempts : 0,
-          repairContext: [
-            `<graph_so_far>`,
-            graphDigest,
-            `</graph_so_far>`,
-            ``,
-            `<entries_to_review_in_this_batch>`,
-            formatEntries(batch, input.settings) || "(No lorebook entries in this batch.)",
-            `</entries_to_review_in_this_batch>`,
-          ].join("\n"),
-        });
-        draftScripts.push(validatedDraft.script);
-        applyWorldPatch(draftRuntime, validatedDraft.scriptResult.patch);
-        graphDigest = summarizePatchHistory(draftScripts, validatedDraft.scriptResult.patch).slice(0, MAX_DIGEST_CHARS);
-      } catch (error) {
-        graphDigest = [
-          graphDigest,
-          `Draft ${index + 1} failed validation and repair: ${error instanceof Error ? error.message : "unknown error"}`,
-        ]
-          .join("\n")
-          .slice(0, MAX_DIGEST_CHARS);
+  const playerPatch = createPlayerBootstrapPatch(input.scene);
+  if (playerPatch.ops.length > 0) {
+    applyWorldPatch(runtime, playerPatch);
+    aggregateOps.push(...playerPatch.ops);
+  }
+
+  for (let index = 0; index < effectiveChunks.length; index++) {
+    const patchResult = await requestStructuredPatchWithRetries({
+      provider: input.provider,
+      model: input.model,
+      runtime,
+      stageLabel: `chunk ${index + 1}/${effectiveChunks.length}`,
+      userPrompt: buildChunkPrompt({
+        chunkIndex: index,
+        chunkCount: effectiveChunks.length,
+        chunkEntries: effectiveChunks[index] ?? [],
+        scene: input.scene,
+        runtime,
+      }),
+      maxRepairAttempts: WORLD_GRAPH_SYNC_MAX_CHUNK_REPAIR_ATTEMPTS,
+    });
+
+    totalRepairAttempts += patchResult.repairAttempts;
+    if (patchResult.patch.ops.length === 0) continue;
+    applyWorldPatch(runtime, patchResult.patch);
+    aggregateOps.push(...patchResult.patch.ops);
+  }
+
+  let review = reviewWorldGraphTopology(runtime);
+  let lastReviewError = review.issues[0] ?? "";
+
+  for (let attempt = 0; attempt < WORLD_GRAPH_SYNC_MAX_FINAL_REPAIR_ATTEMPTS && review.issues.length > 0; attempt++) {
+    totalRepairAttempts += 1;
+
+    try {
+      const patchResult = await requestStructuredPatchWithRetries({
+        provider: input.provider,
+        model: input.model,
+        runtime,
+        stageLabel: `final topology repair ${attempt + 1}/${WORLD_GRAPH_SYNC_MAX_FINAL_REPAIR_ATTEMPTS}`,
+        userPrompt: buildFinalRepairPrompt(runtime, review),
+        maxRepairAttempts: 0,
+      });
+
+      if (patchResult.patch.ops.length === 0) {
+        throw new Error("Final topology repair returned no graph mutations.");
       }
+
+      applyWorldPatch(runtime, patchResult.patch);
+      aggregateOps.push(...patchResult.patch.ops);
+      review = reviewWorldGraphTopology(runtime);
+      lastReviewError = review.issues[0] ?? lastReviewError;
+    } catch (error) {
+      lastReviewError = error instanceof Error ? error.message : "Final topology repair failed";
     }
   }
 
-  const finalRaw = await input.provider.chatComplete(
-    [
-      { role: "system", content: CODEACT_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [
-          `Reconcile these draft world graph scripts into ONE final script.`,
-          ``,
-          `Rules:`,
-          `- Merge duplicate locations, characters, and items.`,
-          `- Keep all useful known locations ready in the graph.`,
-          `- Set revealed=false for locations the player should not see on the HUD yet.`,
-          `- Set revealed=true for the current location, obvious exits, or places explicitly visible/known from the scene.`,
-          `- Set visited=true only for the current or previously established visited locations.`,
-          `- Place Player at the best current scene location. Create Player if needed.`,
-          `- Place only characters who are plausibly present in the current scene. Other characters may exist without move().`,
-          `- Use connectLocations(...) only for navigable map paths. Put soft relationships in descriptions/tags/data.`,
-          `- Use placeLocation(...) for containment such as island in sea, country in planet, room in building, or region in world.`,
-          `- Use structured edge metadata so the UI can display paths later: label, description, direction, type.`,
-          `- Return only executable world graph DSL code.`,
-          ``,
-          `<current_scene_context>`,
-          formatSceneContext(input.scene),
-          `</current_scene_context>`,
-          ``,
-          `<all_lorebook_entry_manifest>`,
-          manifest || "(No lorebook entries are attached.)",
-          `</all_lorebook_entry_manifest>`,
-          ``,
-          `<draft_scripts>`,
-          draftScripts.join("\n\n// ---- next draft ----\n\n").slice(0, MAX_FINAL_SCRIPT_CHARS),
-          `</draft_scripts>`,
-        ].join("\n"),
-      },
-    ],
-    { model: input.model, temperature: 0.15, maxTokens: 16_000 },
-  );
+  if (review.issues.length > 0) {
+    throw new Error(
+      `World graph topology validation failed after ${WORLD_GRAPH_SYNC_MAX_FINAL_REPAIR_ATTEMPTS} repair attempt(s): ${lastReviewError || review.issues[0]}`,
+    );
+  }
 
-  const finalSeedScript =
-    extractWorldScript(finalRaw.content ?? "") ||
-    draftScripts.join("\n\n") ||
-    `createCharacter({ name: "Player", description: "The player." });
-createLocation({ name: "Current Scene", description: "The player's current scene location.", revealed: true, visited: true });
-move("Player", "Current Scene");`;
-  const finalValidation = await validateWorldGraphScriptWithRetries({
-    provider: input.provider,
-    model: input.model,
-    scene: input.scene,
-    runtime: createWorldGraphRuntime(),
-    script: finalSeedScript,
-    graphId: "sync",
-    stageLabel: "final reconciliation",
-    maxRepairAttempts: input.settings.syncMaxFinalRepairAttempts,
-    enableRouteReview: input.settings.syncFinalRouteReview,
-    repairContext: [
-      `<all_lorebook_entry_manifest>`,
-      manifest || "(No lorebook entries are attached.)",
-      `</all_lorebook_entry_manifest>`,
-      ``,
-      `<draft_scripts>`,
-      draftScripts.join("\n\n// ---- next draft ----\n\n").slice(0, MAX_FINAL_SCRIPT_CHARS) || "(none)",
-      `</draft_scripts>`,
-    ].join("\n"),
-  });
-  const finalScript = withRuntimeDefaults(finalValidation.script, input.scene);
-  const scriptResult = finalValidation.scriptResult;
   const patch: WorldGraphPatch = {
-    ...scriptResult.patch,
-    events: scriptResult.patch.events.length
-      ? scriptResult.patch.events
-      : [`Synced world graph from lorebooks (${scriptResult.patch.ops.length} operations).`],
+    ops: aggregateOps,
+    events: [],
     result: {
-      source: "lorebook_codeact_sync",
-      script: finalScript,
-      scriptResult: scriptResult.scriptResult,
-      operationCount: scriptResult.patch.ops.length,
-      repairAttempts: finalValidation.repairAttempts,
-      validationErrors: finalValidation.validationErrors,
+      source: "lorebook_structured_sync",
+      batchCount: effectiveChunks.length,
+      repairAttempts: totalRepairAttempts,
     },
   };
 
@@ -196,128 +223,273 @@ move("Player", "Current Scene");`;
   };
 }
 
-const CODEACT_SYSTEM_PROMPT = `You are a CodeAct world graph builder for a roleplay app.
+async function requestStructuredPatchWithRetries(input: StructuredPatchRequestInput): Promise<StructuredPatchResult> {
+  let lastError = "";
 
-You must write executable JavaScript using ONLY this world graph DSL:
+  for (let attempt = 0; attempt <= input.maxRepairAttempts; attempt++) {
+    try {
+      const patch = await requestStructuredPatch({
+        provider: input.provider,
+        model: input.model,
+        runtime: input.runtime,
+        userPrompt: buildRepairAwarePrompt(input.userPrompt, attempt > 0 ? lastError : ""),
+      });
+      return {
+        patch,
+        repairAttempts: attempt,
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "Structured patch validation failed";
+      if (attempt === input.maxRepairAttempts) {
+        throw new Error(`World graph ${input.stageLabel} failed after ${attempt + 1} attempt(s): ${lastError}`);
+      }
+    }
+  }
 
-createLocation({
-  name: string,
-  description?: string,
-  tags?: string[],
-  x?: number | null,
-  y?: number | null,
-  floor?: string | null,
-  revealed?: boolean,
-  visited?: boolean,
-  data?: object
-});
+  throw new Error(`World graph ${input.stageLabel} exhausted its repair loop`);
+}
 
-createCharacter({ name: string, description?: string, data?: object });
-createItem({ name: string, description?: string, tags?: string[], data?: object });
+async function requestStructuredPatch(input: {
+  provider: BaseLLMProvider;
+  model: string;
+  runtime: WorldGraphRuntime;
+  userPrompt: string;
+}): Promise<WorldGraphPatch> {
+  const requestMessages = [
+    { role: "system" as const, content: STRUCTURED_WORLD_GRAPH_SYSTEM_PROMPT },
+    { role: "user" as const, content: input.userPrompt },
+  ];
+  const requestOptions = {
+    model: input.model,
+    temperature: 0.15,
+    maxTokens: 8_192,
+  };
 
-connectLocations({
-  from: string,
-  to: string,
-  label?: string,
-  description?: string,
-  direction?: string,
-  type?: "door" | "path" | "road" | "stairs" | "portal" | "interior" | "route" | string,
-  bidirectional?: boolean,
-  hidden?: boolean,
-  data?: object
-});
+  const result = await input.provider.chatComplete(requestMessages, requestOptions);
 
-placeLocation({
-  location: string,
-  parent: string,
-  label?: string,
-  description?: string,
-  type?: "inside" | "part_of" | "region" | "country" | "planet" | "building" | string,
-  data?: object
-});
+  const patchCandidate = parseJsonCodeCandidate(result.content ?? "");
+  return validateStructuredCodePatch(input.runtime, patchCandidate);
+}
 
-move(characterName: string, locationName: string);
-place(itemName: string, locationName: string);
-reveal(locationName: string);
-visit(locationName: string);
+function buildRepairAwarePrompt(basePrompt: string, validationError?: string) {
+  if (!validationError?.trim()) return basePrompt;
+  return [
+    basePrompt,
+    ``,
+    `<validation_error>`,
+    validationError.slice(0, MAX_VALIDATION_ERROR_CHARS),
+    `</validation_error>`,
+  ].join("\n");
+}
 
-Important runtime constraints:
-- No imports, require, eval, Function, process, globalThis, async, timers, classes, or external libraries.
-- Do not define TypeScript types. The runtime executes JavaScript in QuickJS.
-- Return only code. A fenced \`\`\`js block is acceptable, but no explanation.
-- Prefer arrays and forEach only when helpful; simple direct calls are best.
-- Every call is validated and converted into a graph patch.
+function buildChunkPrompt(input: {
+  chunkIndex: number;
+  chunkCount: number;
+  chunkEntries: Array<{ book: Lorebook; entry: LorebookEntry }>;
+  scene: SceneContext;
+  runtime: WorldGraphRuntime;
+}) {
+  return [
+    `Process lorebook chunk ${input.chunkIndex + 1}/${input.chunkCount}.`,
+    `Return one incremental structured JSON object with a code string only.`,
+    ``,
+    `<current_scene_context>`,
+    formatSceneContext(input.scene),
+    `</current_scene_context>`,
+    ``,
+    `<current_world_state_digest>`,
+    buildWorldStateDigest(input.runtime).slice(0, MAX_STATE_DIGEST_CHARS),
+    `</current_world_state_digest>`,
+    ``,
+    `<lorebook_chunk>`,
+    formatEntries(input.chunkEntries) ||
+      "(No lorebook entries in this chunk. Create only minimal scene-facing state if clearly justified.)",
+    `</lorebook_chunk>`,
+  ].join("\n");
+}
 
-Visibility rules:
-- Include useful known locations now, even if hidden.
-- Use revealed=false on places the HUD should not show yet.
-- Use revealed=true for the current location, immediate obvious exits, or known visible places.
-- Use visited=true only for the current or previously established visited locations.
+function buildFinalRepairPrompt(runtime: WorldGraphRuntime, review: ReturnType<typeof reviewWorldGraphTopology>) {
+  return [
+    `Repair only the listed topology issues in the current world graph.`,
+    `Return one incremental structured JSON object with a code string only.`,
+    `Do not recreate the whole graph.`,
+    `Containment is already traversable through parent/child movement, so do not add duplicate routes just because a location is inside another location.`,
+    `For normal travel routes, add the missing return path unless the route is clearly one-way.`,
+    `For disconnected locations, either place them into the right containment tree or connect them with a real travel route justified by the existing graph.`,
+    `Use the tracked current location and recent messages to decide where the player, present characters, and scene items belong.`,
+    `Every character must be in exactly one location.`,
+    `Every item must be either in exactly one location or held by exactly one character.`,
+    ``,
+    `<graph_review_issues>`,
+    review.issues.join("\n"),
+    `</graph_review_issues>`,
+    ``,
+    `<current_world_state_digest>`,
+    buildWorldStateDigest(runtime).slice(0, MAX_STATE_DIGEST_CHARS),
+    `</current_world_state_digest>`,
+  ].join("\n");
+}
 
-Connection rules:
-- Only connect locations when they are navigable map paths.
-- Do not use connectLocations for containment. Use placeLocation for "inside", "part of", "region of", "country on planet", "room in building", etc.
-- Soft relationships such as family, politics, ownership, history, hatred, or prophecy belong in descriptions, tags, or data, not location edges.
-- Always include useful edge metadata when known: label, description, direction, type.
+function createPlayerBootstrapPatch(scene: SceneContext): WorldGraphPatch {
+  const playerName = scene.personaName?.trim() || "Player";
+  const playerDescription = scene.personaDescription?.trim() || `The player's persona, ${playerName}.`;
+  return {
+    ops: [
+      {
+        type: "createCharacter",
+        key: "player",
+        name: playerName,
+        description: playerDescription,
+        aliases: Array.from(new Set(["Player", playerName])).filter(Boolean),
+        isPlayer: true,
+      },
+    ],
+    events: [],
+  };
+}
 
-Scene placement:
-- A player character already exists with key "player".
-- Do not create a duplicate player character.
-- Use move("Player", ...) to place the player in the best current scene location.
-- Place present scene characters with move().
-- Characters not currently present can be created without move().`;
+function buildWorldStateDigest(graph: WorldGraphRuntime) {
+  const playerLocationKey = findPlayerLocationKey(graph);
+  const playerLocationName = playerLocationKey ? String(graph.getNodeAttribute(playerLocationKey, "name")) : "";
+  const presentCharacterIds =
+    playerLocationKey === null
+      ? []
+      : graph
+          .inEdges(playerLocationKey)
+          .filter((edge) => graph.getEdgeAttribute(edge, "kind") === "at")
+          .map((edge) => graph.source(edge))
+          .filter((key) => key !== "player");
+  const visibleLocationIds = graph
+    .nodes()
+    .filter(
+      (key) => graph.getNodeAttribute(key, "kind") === "location" && graph.getNodeAttribute(key, "revealed") === true,
+    );
 
-const WORLD_GRAPH_REPAIR_SYSTEM_PROMPT = `You repair world graph DSL after runtime validation failures.
+  const nodeIds = graph.nodes().sort((a, b) => {
+    const aAttrs = graph.getNodeAttributes(a);
+    const bAttrs = graph.getNodeAttributes(b);
+    const aPriority = digestNodePriority(a, aAttrs.kind as string, playerLocationKey);
+    const bPriority = digestNodePriority(b, bAttrs.kind as string, playerLocationKey);
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    return String(aAttrs.name).localeCompare(String(bAttrs.name));
+  });
 
-Return only executable world graph DSL code.
+  const nodeLines: string[] = [];
+  let omittedNodes = 0;
+  for (const key of nodeIds) {
+    const attrs = graph.getNodeAttributes(key);
+    const flags = [
+      attrs.kind === "location" && attrs.revealed ? "revealed" : "",
+      attrs.kind === "location" && attrs.visited ? "visited" : "",
+      key === "player" ? "player" : "",
+      key === playerLocationKey ? "current_location" : "",
+    ]
+      .filter(Boolean)
+      .join(",");
+    const line = [
+      `[${key}]`,
+      attrs.kind,
+      attrs.name,
+      attrs.aliases?.length ? `aliases=${attrs.aliases.join(",")}` : "",
+      attrs.lorebookEntryId ? `lorebookEntryId=${attrs.lorebookEntryId}` : "",
+      attrs.tags?.length ? `tags=${attrs.tags.join(",")}` : "",
+      attrs.description ? `desc=${buildPreviewText(attrs.description, 140)}` : "",
+      attrs.floor ? `floor=${attrs.floor}` : "",
+      flags ? `flags=${flags}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | ");
+    if (currentDigestSize(nodeLines, []) + line.length > MAX_STATE_DIGEST_CHARS * 0.66) {
+      omittedNodes = nodeIds.length - nodeLines.length;
+      break;
+    }
+    nodeLines.push(line);
+  }
 
-Rules:
-- Preserve as much valid intent from the failed script as possible.
-- Fix the reported runtime error directly.
-- Do not add explanations, markdown prose, or comments outside the code.
-- Keep using only the supported DSL calls.
-- Avoid duplicate entities and contradictory placement.
-- Use placeLocation(...) for containment and connectLocations(...) for navigable travel.`;
+  const edgeIds = graph.edges().sort((a, b) => {
+    const aSource = graph.source(a);
+    const bSource = graph.source(b);
+    if (aSource !== bSource) return aSource.localeCompare(bSource);
+    return graph.target(a).localeCompare(graph.target(b));
+  });
 
-const WORLD_GRAPH_ROUTE_REVIEW_SYSTEM_PROMPT = `You review and repair world graph DSL so the map is navigable and semantically sensible.
+  const edgeLines: string[] = [];
+  let omittedEdges = 0;
+  for (const edge of edgeIds) {
+    const attrs = graph.getEdgeAttributes(edge);
+    const line = [
+      `[${graph.source(edge)}]`,
+      `-${attrs.kind}${attrs.oneWay ? "(one-way)" : ""}->`,
+      `[${graph.target(edge)}]`,
+    ].join(" ");
+    if (currentDigestSize(nodeLines, edgeLines) + line.length > MAX_STATE_DIGEST_CHARS) {
+      omittedEdges = edgeIds.length - edgeLines.length;
+      break;
+    }
+    edgeLines.push(line);
+  }
 
-Return only executable world graph DSL code.
-
-Rules:
-- Preserve as much valid world information as possible.
-- Review every location route and containment relationship before responding.
-- For normal travel routes (door, path, road, stairs, interior, route), prefer bidirectional travel unless a one-way path is clearly intended.
-- Do not use connectLocations(...) and placeLocation(...) on the same exact source/target pair unless the route is truly navigable and containment is also clearly needed.
-- Current player-facing locations should have sensible exits when the surrounding map implies they should.
-- Use placeLocation(...) for containment and connectLocations(...) for traversable movement.
-- Remove or rewrite nonsensical containment such as dimensions being physically inside city buildings unless the lore explicitly requires it.`;
-
-function buildEntryManifest(entries: Array<{ book: Lorebook; entry: LorebookEntry }>, settings: WorldGraphSyncSettings) {
-  return entries
-    .map(({ book, entry }, index) => {
-      const keys = [...entry.keys, ...entry.secondaryKeys].filter(Boolean).join(", ");
-      const tagParts = [entry.tag, entry.group, book.category, ...book.tags].filter(Boolean).join(", ");
-      const preview = buildPreviewText(entry.content, Math.min(settings.syncPreviewChars, 420));
-      return [
-        `${index + 1}. [${entry.id}] ${book.name} / ${entry.name}`,
-        keys ? `keys: ${keys}` : "",
-        tagParts ? `tags: ${tagParts}` : "",
-        preview ? `preview: ${preview}` : "",
-      ]
-        .filter(Boolean)
-        .join(" | ");
-    })
+  return [
+    `Current scene: player=player${playerLocationName ? ` | player_location=${playerLocationName}` : ""}`,
+    presentCharacterIds.length ? `Present characters: ${presentCharacterIds.join(", ")}` : `Present characters: (none)`,
+    visibleLocationIds.length ? `Visible locations: ${visibleLocationIds.join(", ")}` : `Visible locations: (none)`,
+    `Nodes:`,
+    nodeLines.join("\n") || "(none)",
+    omittedNodes > 0 ? `... ${omittedNodes} more node(s) omitted ...` : "",
+    `Edges:`,
+    edgeLines.join("\n") || "(none)",
+    omittedEdges > 0 ? `... ${omittedEdges} more edge(s) omitted ...` : "",
+  ]
+    .filter(Boolean)
     .join("\n");
 }
 
-function chunkEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>, settings: WorldGraphSyncSettings) {
+function currentDigestSize(nodeLines: string[], edgeLines: string[]) {
+  return nodeLines.join("\n").length + edgeLines.join("\n").length;
+}
+
+function digestNodePriority(nodeId: string, kind: string, playerLocationKey: string | null) {
+  if (nodeId === "player") return 0;
+  if (nodeId === playerLocationKey) return 1;
+  if (kind === "location") return 2;
+  if (kind === "character") return 3;
+  return 4;
+}
+
+function findPlayerLocationKey(graph: WorldGraphRuntime) {
+  if (!graph.hasNode("player")) return null;
+  const atEdge = graph.outEdges("player").find((edge) => graph.getEdgeAttribute(edge, "kind") === "at");
+  return atEdge ? graph.target(atEdge) : null;
+}
+
+function formatEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>) {
+  return entries.map((item) => formatEntry(item)).join("\n\n");
+}
+
+function formatEntry({ book, entry }: { book: Lorebook; entry: LorebookEntry }) {
+  return [
+    `<entry id="${entry.id}" lorebook="${escapeAttr(book.name)}" category="${escapeAttr(book.category)}">`,
+    `Name: ${entry.name}`,
+    entry.keys.length ? `Keys: ${entry.keys.join(", ")}` : "",
+    entry.secondaryKeys.length ? `Secondary keys: ${entry.secondaryKeys.join(", ")}` : "",
+    entry.tag ? `Tag: ${entry.tag}` : "",
+    entry.group ? `Group: ${entry.group}` : "",
+    `Content Preview:`,
+    buildPreviewText(entry.content, WORLD_GRAPH_SYNC_PREVIEW_CHARS) || "(empty)",
+    `</entry>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function chunkEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>, chunkCharLimit: number) {
   const chunks: Array<Array<{ book: Lorebook; entry: LorebookEntry }>> = [];
   let current: Array<{ book: Lorebook; entry: LorebookEntry }> = [];
   let currentSize = 0;
 
   for (const item of entries) {
-    const size = formatEntry(item, settings).length + 2;
-    if (current.length > 0 && currentSize + size > settings.syncChunkCharLimit) {
+    const size = formatEntry(item).length + 2;
+    if (current.length > 0 && currentSize + size > chunkCharLimit) {
       chunks.push(current);
       current = [];
       currentSize = 0;
@@ -330,36 +502,11 @@ function chunkEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>, 
   return chunks;
 }
 
-function formatEntries(entries: Array<{ book: Lorebook; entry: LorebookEntry }>, settings: WorldGraphSyncSettings) {
-  return entries.map((item) => formatEntry(item, settings)).join("\n\n");
-}
-
-function formatEntry(
-  { book, entry }: { book: Lorebook; entry: LorebookEntry },
-  settings: WorldGraphSyncSettings,
-) {
-  const contentLabel = settings.syncEntryDetail === "full" ? "Content" : "Content Preview";
-  const content =
-    settings.syncEntryDetail === "full" ? entry.content || "(empty)" : buildPreviewText(entry.content, settings.syncPreviewChars) || "(empty)";
-  return [
-    `<entry id="${entry.id}" lorebook="${escapeAttr(book.name)}" category="${escapeAttr(book.category)}">`,
-    `Name: ${entry.name}`,
-    entry.keys.length ? `Keys: ${entry.keys.join(", ")}` : "",
-    entry.secondaryKeys.length ? `Secondary keys: ${entry.secondaryKeys.join(", ")}` : "",
-    entry.tag ? `Tag: ${entry.tag}` : "",
-    entry.group ? `Group: ${entry.group}` : "",
-    `${contentLabel}:`,
-    content,
-    `</entry>`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function formatSceneContext(scene: SceneContext) {
   return [
     `Persona/player display name: ${scene.personaName || "Player"}`,
     scene.personaDescription ? `Persona description: ${scene.personaDescription}` : "",
+    scene.currentLocation ? `Tracked current location: ${scene.currentLocation}` : "",
     scene.characterNames.length ? `Chat characters: ${scene.characterNames.join(", ")}` : `Chat characters: (none)`,
     scene.summary ? `Chat summary: ${scene.summary}` : "",
     `Recent messages:`,
@@ -374,405 +521,65 @@ function formatSceneContext(scene: SceneContext) {
     .join("\n");
 }
 
+async function validateStructuredCodePatch(runtime: WorldGraphRuntime, patchCandidate: unknown) {
+  const code = extractStructuredCode(patchCandidate);
+  const script = extractWorldScript(code);
+  if (!script) {
+    return {
+      ops: [],
+      events: [],
+    } satisfies WorldGraphPatch;
+  }
+
+  const scriptResult = await runWorldGraphScript("lorebook-sync", runtime, script, {
+    maxOps: 512,
+  });
+  return scriptResult.patch;
+}
+
+function parseJsonCodeCandidate(raw: string) {
+  if (!raw.trim()) throw new Error('Model returned no structured world graph JSON object');
+  return JSON.parse(extractJson(raw));
+}
+
+function extractStructuredCode(value: unknown) {
+  if (!isRecord(value) || typeof value.code !== "string") {
+    throw new Error('Model must return raw JSON with shape { "code": "..." }');
+  }
+  return value.code;
+}
+
+function extractJson(text: string): string {
+  // Try markdown code fences
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (fenceMatch) text = fenceMatch[1]!.trim();
+  else {
+    // Try to find a bare JSON object or array
+    const jsonMatch = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+    if (jsonMatch) text = jsonMatch[1]!;
+  }
+
+  // Repair common LLM JSON issues
+  text = repairJson(text);
+  return text;
+}
+
+function repairJson(str: string) {
+  return str
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/,\s*([\]\}])/g, "$1")
+    .replace(/\.\.\.[^"\n]*/g, "");
+}
+
 function extractWorldScript(raw: string) {
-  const fenceMatch = raw.match(/```(?:ts|typescript|js|javascript)?\s*\n?([\s\S]*?)```/i);
-  const text = (fenceMatch?.[1] ?? raw).trim();
+  const text = raw.trim();
   return text
+    .replace(/^\s*```(?:ts|typescript|js|javascript)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
     .replace(/^\s*\/\/\s*world-graph-script\s*/i, "")
     .replace(/^\s*export\s+/gm, "")
     .trim();
-}
-
-function withRuntimeDefaults(script: string, scene: SceneContext) {
-  const body = script.trim();
-  if (!body) return "";
-  const playerName = scene.personaName?.trim() || "Player";
-  const playerDescription = scene.personaDescription?.trim() || `The player's persona, ${playerName}.`;
-  return [
-    `createCharacter({ key: "player", name: "${escapeJsString(playerName)}", description: "${escapeJsString(playerDescription)}", data: { isPlayer: true, aliases: ["Player", "${escapeJsString(playerName)}"] } });`,
-    body,
-  ].join("\n");
-}
-
-async function validateWorldGraphScriptWithRetries(input: {
-  provider: BaseLLMProvider;
-  model: string;
-  scene: SceneContext;
-  runtime: WorldGraphRuntime;
-  script: string;
-  graphId: string;
-  stageLabel: string;
-  maxRepairAttempts: number;
-  enableRouteReview?: boolean;
-  repairContext?: string;
-}) {
-  let candidate = extractWorldScript(input.script);
-  const validationErrors: string[] = [];
-
-  if (!candidate) throw new Error(`World graph ${input.stageLabel} produced no executable code`);
-
-  for (let attempt = 0; attempt <= input.maxRepairAttempts; attempt++) {
-    try {
-      const rawScriptResult = await runWorldGraphScript(input.graphId, input.runtime, withRuntimeDefaults(candidate, input.scene), {
-        maxOps: 512,
-      });
-      const previewRuntime = input.runtime.copy() as WorldGraphRuntime;
-      applyWorldPatch(previewRuntime, rawScriptResult.patch);
-      const autoRepairPatch = buildWorldGraphRouteAutoRepairPatch(previewRuntime);
-      if (autoRepairPatch.ops.length > 0) {
-        applyWorldPatch(previewRuntime, autoRepairPatch);
-      }
-      const scriptResult =
-        autoRepairPatch.ops.length > 0
-          ? {
-              ...rawScriptResult,
-              patch: {
-                ...rawScriptResult.patch,
-                ops: [...rawScriptResult.patch.ops, ...autoRepairPatch.ops],
-                events: [...rawScriptResult.patch.events, ...autoRepairPatch.events],
-              },
-            }
-          : rawScriptResult;
-      if (input.enableRouteReview) {
-        const routeReview = reviewWorldGraphTopology(previewRuntime);
-        if (routeReview.issues.length > 0) {
-          validationErrors.push(...routeReview.issues);
-          if (attempt === input.maxRepairAttempts) {
-            throw new Error(
-              `World graph ${input.stageLabel} route review failed after ${attempt + 1} attempt(s): ${routeReview.issues[0]}`,
-            );
-          }
-          candidate = await requestWorldGraphRouteReviewRepair({
-            provider: input.provider,
-            model: input.model,
-            scene: input.scene,
-            failedScript: candidate,
-            stageLabel: input.stageLabel,
-            routeIssues: routeReview.issues,
-            routeSummary: routeReview.summary,
-            repairContext: input.repairContext,
-          });
-          continue;
-        }
-      }
-      return {
-        script: candidate,
-        scriptResult,
-        repairAttempts: attempt,
-        validationErrors,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown error";
-      validationErrors.push(message);
-      if (attempt === input.maxRepairAttempts) {
-        throw new Error(`World graph ${input.stageLabel} failed after ${attempt + 1} attempt(s): ${message}`);
-      }
-      candidate = await requestWorldGraphScriptRepair({
-        provider: input.provider,
-        model: input.model,
-        scene: input.scene,
-        failedScript: candidate,
-        stageLabel: input.stageLabel,
-        validationError: message,
-        previousErrors: validationErrors,
-        repairContext: input.repairContext,
-      });
-    }
-  }
-
-  throw new Error(`World graph ${input.stageLabel} exhausted its repair loop`);
-}
-
-async function requestWorldGraphScriptRepair(input: {
-  provider: BaseLLMProvider;
-  model: string;
-  scene: SceneContext;
-  failedScript: string;
-  stageLabel: string;
-  validationError: string;
-  previousErrors: string[];
-  repairContext?: string;
-}) {
-  const raw = await input.provider.chatComplete(
-    [
-      { role: "system", content: WORLD_GRAPH_REPAIR_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [
-          `Repair this world graph script so it passes runtime validation.`,
-          `Stage: ${input.stageLabel}`,
-          ``,
-          `<current_scene_context>`,
-          formatSceneContext(input.scene),
-          `</current_scene_context>`,
-          ``,
-          input.repairContext?.trim() || "",
-          input.repairContext?.trim() ? `` : "",
-          `<validation_error>`,
-          input.validationError,
-          `</validation_error>`,
-          ``,
-          `<previous_errors>`,
-          input.previousErrors.join("\n"),
-          `</previous_errors>`,
-          ``,
-          `<failed_script>`,
-          input.failedScript,
-          `</failed_script>`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      },
-    ],
-    { model: input.model, temperature: 0.1, maxTokens: 8_192 },
-  );
-
-  const repaired = extractWorldScript(raw.content ?? "");
-  if (!repaired) throw new Error(`World graph ${input.stageLabel} repair returned no executable code`);
-  return repaired;
-}
-
-async function requestWorldGraphRouteReviewRepair(input: {
-  provider: BaseLLMProvider;
-  model: string;
-  scene: SceneContext;
-  failedScript: string;
-  stageLabel: string;
-  routeIssues: string[];
-  routeSummary: string;
-  repairContext?: string;
-}) {
-  const raw = await input.provider.chatComplete(
-    [
-      { role: "system", content: WORLD_GRAPH_ROUTE_REVIEW_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [
-          `Review all location routes and containment relationships, then repair the script.` ,
-          `Stage: ${input.stageLabel}`,
-          ``,
-          `<current_scene_context>`,
-          formatSceneContext(input.scene),
-          `</current_scene_context>`,
-          ``,
-          input.repairContext?.trim() || "",
-          input.repairContext?.trim() ? `` : "",
-          `<route_issues>`,
-          input.routeIssues.join("\n"),
-          `</route_issues>`,
-          ``,
-          `<route_summary>`,
-          input.routeSummary,
-          `</route_summary>`,
-          ``,
-          `<failed_script>`,
-          input.failedScript,
-          `</failed_script>`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      },
-    ],
-    { model: input.model, temperature: 0.1, maxTokens: 8_192 },
-  );
-
-  const repaired = extractWorldScript(raw.content ?? "");
-  if (!repaired) throw new Error(`World graph ${input.stageLabel} route review returned no executable code`);
-  return repaired;
-}
-
-function buildWorldGraphRouteAutoRepairPatch(graph: WorldGraphRuntime): WorldGraphPatch {
-  const ops: WorldGraphPatch["ops"] = [];
-  const events: string[] = [];
-  const addedRouteKeys = new Set<string>();
-  const currentLocationKey = findPlayerLocationKey(graph);
-  const connectEdges = graph.edges().filter((edge) => graph.getEdgeAttribute(edge, "kind") === "connects_to");
-
-  for (const edge of connectEdges) {
-    const source = graph.source(edge);
-    const target = graph.target(edge);
-    const sourceName = String(graph.getNodeAttribute(source, "name"));
-    const targetName = String(graph.getNodeAttribute(target, "name"));
-    const edgeData = graph.getEdgeAttribute(edge, "data") as Record<string, unknown> | undefined;
-    const routeType = String(edgeData?.type ?? "").trim().toLowerCase();
-    const reverseExists = graph
-      .directedEdges(target, source)
-      .some((candidate) => graph.getEdgeAttribute(candidate, "kind") === "connects_to");
-    const oneWayRoute = routeType === "portal" || edgeData?.oneWay === true || edgeData?.unidirectional === true;
-    if (reverseExists || oneWayRoute) continue;
-
-    const repairKey = `${target}->${source}`;
-    if (addedRouteKeys.has(repairKey)) continue;
-    ops.push({
-      type: "connectLocations",
-      from: target,
-      to: source,
-      bidirectional: false,
-      data: edgeData ?? {},
-    });
-    events.push(`Auto-repaired missing return route from ${targetName} to ${sourceName}.`);
-    addedRouteKeys.add(repairKey);
-  }
-
-  const containmentEdges = graph.edges().filter((edge) => graph.getEdgeAttribute(edge, "kind") === "in");
-  for (const edge of containmentEdges) {
-    const child = graph.source(edge);
-    const parent = graph.target(edge);
-    if (graph.getNodeAttribute(child, "kind") !== "location" || graph.getNodeAttribute(parent, "kind") !== "location") {
-      continue;
-    }
-
-    const data = (graph.getEdgeAttribute(edge, "data") as Record<string, unknown> | undefined) ?? {};
-    const containmentType = String(data.type ?? "").trim().toLowerCase();
-    const navigableInterior =
-      containmentType === "inside" || containmentType === "building" || child === currentLocationKey;
-    if (!navigableInterior) continue;
-
-    const hasRouteEitherWay = graph
-      .edges(child, parent)
-      .some((candidate) => graph.getEdgeAttribute(candidate, "kind") === "connects_to");
-    if (hasRouteEitherWay) continue;
-
-    const repairKey = `${child}<->${parent}`;
-    if (addedRouteKeys.has(repairKey)) continue;
-    ops.push({
-      type: "connectLocations",
-      from: child,
-      to: parent,
-      bidirectional: true,
-      data: {
-        label: data.label ?? "Interior Route",
-        description: data.description ?? `Traversal between ${graph.getNodeAttribute(child, "name")} and ${graph.getNodeAttribute(parent, "name")}.`,
-        direction: data.direction ?? "inside",
-        type: data.type ?? "interior",
-      },
-    });
-    events.push(
-      `Auto-repaired missing interior route between ${graph.getNodeAttribute(child, "name")} and ${graph.getNodeAttribute(parent, "name")}.`,
-    );
-    addedRouteKeys.add(repairKey);
-  }
-
-  return { ops, events };
-}
-
-function reviewWorldGraphTopology(graph: WorldGraphRuntime) {
-  const issues = new Set<string>();
-  const locationKeys = graph.nodes().filter((key) => graph.getNodeAttribute(key, "kind") === "location");
-  const connectEdges = graph
-    .edges()
-    .filter((edge) => graph.getEdgeAttribute(edge, "kind") === "connects_to");
-  const containmentEdges = graph
-    .edges()
-    .filter((edge) => graph.getEdgeAttribute(edge, "kind") === "in");
-  const currentLocationKey = findPlayerLocationKey(graph);
-
-  if (currentLocationKey && locationKeys.length > 1) {
-    const currentExits = connectEdges.filter((edge) => graph.source(edge) === currentLocationKey);
-    if (currentExits.length === 0) {
-      issues.add(`Player current location "${graph.getNodeAttribute(currentLocationKey, "name")}" has no outbound routes.`);
-    }
-  }
-
-  for (const edge of connectEdges) {
-    const source = graph.source(edge);
-    const target = graph.target(edge);
-    const sourceName = graph.getNodeAttribute(source, "name");
-    const targetName = graph.getNodeAttribute(target, "name");
-    const edgeData = graph.getEdgeAttribute(edge, "data") as Record<string, unknown> | undefined;
-    const routeType = String(edgeData?.type ?? "").trim().toLowerCase();
-    const reverseExists = graph
-      .directedEdges(target, source)
-      .some((candidate) => graph.getEdgeAttribute(candidate, "kind") === "connects_to");
-    const oneWayRoute = routeType === "portal" || edgeData?.oneWay === true || edgeData?.unidirectional === true;
-    if (!reverseExists && !oneWayRoute) {
-      issues.add(`Route "${sourceName}" -> "${targetName}" is missing a return path.`);
-    }
-  }
-
-  for (const edge of containmentEdges) {
-    const source = graph.source(edge);
-    const target = graph.target(edge);
-    const sourceAttrs = graph.getNodeAttributes(source);
-    const targetAttrs = graph.getNodeAttributes(target);
-    const sourceTags = new Set((sourceAttrs.tags ?? []).map(String).map((tag) => tag.toLowerCase()));
-    const targetTags = new Set((targetAttrs.tags ?? []).map(String).map((tag) => tag.toLowerCase()));
-    const sourceName = String(sourceAttrs.name ?? "");
-    if (
-      (sourceTags.has("dimension") || /\brealm\b/i.test(sourceName)) &&
-      (targetTags.has("city") || targetTags.has("school") || targetTags.has("building"))
-    ) {
-      issues.add(`Containment "${sourceAttrs.name}" inside "${targetAttrs.name}" looks semantically wrong.`);
-    }
-  }
-
-  return {
-    issues: [...issues],
-    summary: summarizeGraphTopology(graph, currentLocationKey),
-  };
-}
-
-function summarizeGraphTopology(graph: WorldGraphRuntime, currentLocationKey: string | null) {
-  const locationKeys = graph.nodes().filter((key) => graph.getNodeAttribute(key, "kind") === "location");
-  const connectEdges = graph
-    .edges()
-    .filter((edge) => graph.getEdgeAttribute(edge, "kind") === "connects_to")
-    .map((edge) => {
-      const data = graph.getEdgeAttribute(edge, "data") as Record<string, unknown> | undefined;
-      return `${graph.getNodeAttribute(graph.source(edge), "name")} -> ${graph.getNodeAttribute(graph.target(edge), "name")} (${String(data?.type ?? "route")}${data?.label ? `, ${String(data.label)}` : ""})`;
-    });
-  const containmentEdges = graph
-    .edges()
-    .filter((edge) => graph.getEdgeAttribute(edge, "kind") === "in")
-    .map((edge) => {
-      const data = graph.getEdgeAttribute(edge, "data") as Record<string, unknown> | undefined;
-      return `${graph.getNodeAttribute(graph.source(edge), "name")} in ${graph.getNodeAttribute(graph.target(edge), "name")} (${String(data?.type ?? "inside")})`;
-    });
-  const locationDetails = locationKeys.map((key) => {
-    const name = graph.getNodeAttribute(key, "name");
-    const exits = graph
-      .outEdges(key)
-      .filter((edge) => graph.getEdgeAttribute(edge, "kind") === "connects_to")
-      .map((edge) => graph.getNodeAttribute(graph.target(edge), "name"));
-    const parents = graph
-      .outEdges(key)
-      .filter((edge) => graph.getEdgeAttribute(edge, "kind") === "in")
-      .map((edge) => graph.getNodeAttribute(graph.target(edge), "name"));
-    return `- ${name}${key === currentLocationKey ? " [CURRENT]" : ""}; exits: ${exits.join(", ") || "(none)"}; containers: ${parents.join(", ") || "(none)"}`;
-  });
-
-  return [
-    `Current location: ${currentLocationKey ? graph.getNodeAttribute(currentLocationKey, "name") : "(unknown)"}`,
-    `Locations:`,
-    locationDetails.join("\n") || "(none)",
-    `Traversable routes:`,
-    connectEdges.join("\n") || "(none)",
-    `Containment edges:`,
-    containmentEdges.join("\n") || "(none)",
-  ].join("\n");
-}
-
-function findPlayerLocationKey(graph: WorldGraphRuntime) {
-  const playerKey = graph.hasNode("player")
-    ? "player"
-    : graph.findNode((_, attrs) => attrs.kind === "character" && (attrs.data as Record<string, unknown> | undefined)?.isPlayer === true);
-  if (!playerKey) return null;
-  const atEdge = graph.outEdges(playerKey).find((edge) => graph.getEdgeAttribute(edge, "kind") === "at");
-  return atEdge ? graph.target(atEdge) : null;
-}
-
-function summarizePatchHistory(scripts: string[], latestPatch: WorldGraphPatch) {
-  const latestOps = latestPatch.ops
-    .slice(-80)
-    .map((op) => JSON.stringify(op))
-    .join("\n");
-  return [
-    `Draft script count: ${scripts.length}`,
-    `Latest operations:`,
-    latestOps || "(none)",
-    `Recent script tail:`,
-    scripts.at(-1)?.slice(-4_000) || "(none)",
-  ].join("\n");
 }
 
 function collapseWhitespace(value: string) {
@@ -787,6 +594,6 @@ function escapeAttr(value: string) {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-function escapeJsString(value: string) {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, " ");
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }

@@ -2,7 +2,7 @@
 // World Graph Read Models
 // ──────────────────────────────────────────────
 import type { WorldEdgeKind, WorldEdgeView, WorldMap, WorldNodeKind, WorldObservation } from "@marinara-engine/shared";
-import { findNodeKey, here, nodeView, type WorldGraphRuntime } from "./world-graph-runtime.js";
+import { findNodeKey, getLocalTraversalExitViews, here, nodeView, type WorldGraphRuntime } from "./world-graph-runtime.js";
 
 export function buildWorldObservation(
   graphId: string,
@@ -21,7 +21,7 @@ export function buildWorldObservation(
     inventory: currentCharacterKey ? inboundNodeViews(graph, currentCharacterKey, "held_by", "item") : [],
     visibleItems: currentLocationKey ? inboundNodeViews(graph, currentLocationKey, "in", "item") : [],
     presentCharacters: currentLocationKey ? inboundNodeViews(graph, currentLocationKey, "at", "character") : [],
-    exits: currentLocationKey ? outboundNodeViews(graph, currentLocationKey, "connects_to", "location") : [],
+    exits: currentLocationKey ? getLocalTraversalExitViews(graph, currentLocationKey) : [],
     recentEvents: recentEvents.slice(-10),
   };
 }
@@ -105,23 +105,5 @@ function inboundNodeViews(
     .filter((edge) => graph.getEdgeAttribute(edge, "kind") === edgeKind)
     .map((edge) => graph.source(edge))
     .filter((key) => graph.getNodeAttribute(key, "kind") === sourceKind)
-    .map((key) => nodeView(graph, key));
-}
-
-function outboundNodeViews(
-  graph: WorldGraphRuntime,
-  source: string,
-  edgeKind: WorldEdgeKind,
-  targetKind: WorldNodeKind,
-) {
-  return graph
-    .outEdges(source)
-    .filter((edge) => graph.getEdgeAttribute(edge, "kind") === edgeKind)
-    .map((edge) => graph.target(edge))
-    .filter((key) => graph.getNodeAttribute(key, "kind") === targetKind)
-    .filter((key) => {
-      const attrs = graph.getNodeAttributes(key);
-      return attrs.kind !== "location" || attrs.revealed !== false || attrs.visited === true;
-    })
     .map((key) => nodeView(graph, key));
 }

@@ -14,7 +14,10 @@ export type WorldNodeAttributes = {
   name: string;
   description?: string;
   tags?: string[];
-  data?: Record<string, unknown>;
+  lorebookEntryId?: string | null;
+  aliases?: string[];
+  isPlayer?: boolean;
+  personaId?: string | null;
   x?: number | null;
   y?: number | null;
   floor?: string | null;
@@ -24,7 +27,7 @@ export type WorldNodeAttributes = {
 
 export type WorldEdgeAttributes = {
   kind: WorldEdgeKind;
-  data?: Record<string, unknown>;
+  oneWay?: boolean;
 };
 
 export interface WorldGraph {

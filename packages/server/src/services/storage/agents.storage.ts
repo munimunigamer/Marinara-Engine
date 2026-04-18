@@ -30,7 +30,12 @@ export function createAgentsStorage(db: DB) {
     },
 
     async getByType(type: string) {
-      const rows = await db.select().from(agentConfigs).where(eq(agentConfigs.type, type));
+      const rows = await db
+        .select()
+        .from(agentConfigs)
+        .where(eq(agentConfigs.type, type))
+        .orderBy(desc(agentConfigs.updatedAt))
+        .limit(1);
       return rows[0] ?? null;
     },
 

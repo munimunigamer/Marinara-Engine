@@ -8,6 +8,7 @@ import {
   explore,
   explorePath,
   findNodeKey,
+  hasTraversalNeighbor,
   here,
   nodeView,
   path,
@@ -176,19 +177,18 @@ function executeWorldFunction(
         location: stringArg(args, 1),
       });
     case "createLocation":
-      return applyScriptOp(graph, ops, events, options, { type: "createLocation", ...objectArg(args, 0) } as any);
+      return applyScriptOp(graph, ops, events, options, createLocationOp(objectArg(args, 0)));
     case "createItem":
-      return applyScriptOp(graph, ops, events, options, { type: "createItem", ...objectArg(args, 0) } as any);
+      return applyScriptOp(graph, ops, events, options, createItemOp(objectArg(args, 0)));
     case "createCharacter":
-      return applyScriptOp(graph, ops, events, options, { type: "createCharacter", ...objectArg(args, 0) } as any);
+      return applyScriptOp(graph, ops, events, options, createCharacterOp(objectArg(args, 0)));
     case "connect": {
       const optionsArg = objectArg(args, 2);
       return applyScriptOp(graph, ops, events, options, {
         type: "connectLocations",
         from: stringArg(args, 0),
         to: stringArg(args, 1),
-        bidirectional: typeof optionsArg.bidirectional === "boolean" ? optionsArg.bidirectional : undefined,
-        data: isPlainRecord(optionsArg.data) ? optionsArg.data : undefined,
+        oneWay: booleanField(optionsArg, "oneWay"),
       });
     }
     case "connectLocations": {
@@ -197,15 +197,7 @@ function executeWorldFunction(
         type: "connectLocations",
         from: stringField(input, "from"),
         to: stringField(input, "to"),
-        bidirectional: typeof input.bidirectional === "boolean" ? input.bidirectional : undefined,
-        data: {
-          ...(stringField(input, "label", true) ? { label: stringField(input, "label", true) } : {}),
-          ...(stringField(input, "description", true) ? { description: stringField(input, "description", true) } : {}),
-          ...(stringField(input, "direction", true) ? { direction: stringField(input, "direction", true) } : {}),
-          ...(stringField(input, "type", true) ? { type: stringField(input, "type", true) } : {}),
-          ...(typeof input.hidden === "boolean" ? { hidden: input.hidden } : {}),
-          ...(isPlainRecord(input.data) ? input.data : {}),
-        },
+        oneWay: booleanField(input, "oneWay"),
       });
     }
     case "placeLocation": {
@@ -214,12 +206,6 @@ function executeWorldFunction(
         type: "placeLocation",
         location: stringField(input, "location"),
         parent: stringField(input, "parent"),
-        data: {
-          ...(stringField(input, "label", true) ? { label: stringField(input, "label", true) } : {}),
-          ...(stringField(input, "description", true) ? { description: stringField(input, "description", true) } : {}),
-          ...(stringField(input, "type", true) ? { type: stringField(input, "type", true) } : {}),
-          ...(isPlainRecord(input.data) ? input.data : {}),
-        },
       });
     }
     case "reveal":
@@ -263,9 +249,7 @@ function canMove(graph: WorldGraphRuntime, character: string, location: string) 
   const current = here(graph, character);
   if (!current) return false;
   const targetKey = findNodeKey(graph, location, "location");
-  return graph
-    .outEdges(current.key)
-    .some((edge) => graph.getEdgeAttribute(edge, "kind") === "connects_to" && graph.target(edge) === targetKey);
+  return hasTraversalNeighbor(graph, current.key, targetKey);
 }
 
 function inventory(graph: WorldGraphRuntime, character: string) {
@@ -357,6 +341,72 @@ function stringField(input: Record<string, unknown>, field: string, optional?: b
   if (typeof value === "string" && value.trim()) return value;
   if (optional) return "";
   throw new Error(`Expected string field "${field}"`);
+}
+
+function optionalStringField(input: Record<string, unknown>, field: string) {
+  const value = input[field];
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function nullableStringField(input: Record<string, unknown>, field: string) {
+  const value = input[field];
+  if (value === null) return null;
+  return optionalStringField(input, field);
+}
+
+function booleanField(input: Record<string, unknown>, field: string) {
+  return typeof input[field] === "boolean" ? input[field] : undefined;
+}
+
+function numberField(input: Record<string, unknown>, field: string) {
+  return typeof input[field] === "number" && Number.isFinite(input[field]) ? input[field] : undefined;
+}
+
+function stringArrayField(input: Record<string, unknown>, field: string) {
+  const value = input[field];
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+}
+
+function createLocationOp(input: Record<string, unknown>): WorldPatchOperation {
+  return {
+    type: "createLocation",
+    key: optionalStringField(input, "key"),
+    name: stringField(input, "name"),
+    description: optionalStringField(input, "description"),
+    tags: stringArrayField(input, "tags"),
+    lorebookEntryId: nullableStringField(input, "lorebookEntryId"),
+    x: numberField(input, "x"),
+    y: numberField(input, "y"),
+    floor: nullableStringField(input, "floor"),
+    revealed: booleanField(input, "revealed"),
+    visited: booleanField(input, "visited"),
+  };
+}
+
+function createItemOp(input: Record<string, unknown>): WorldPatchOperation {
+  return {
+    type: "createItem",
+    key: optionalStringField(input, "key"),
+    name: stringField(input, "name"),
+    description: optionalStringField(input, "description"),
+    tags: stringArrayField(input, "tags"),
+    lorebookEntryId: nullableStringField(input, "lorebookEntryId"),
+  };
+}
+
+function createCharacterOp(input: Record<string, unknown>): WorldPatchOperation {
+  return {
+    type: "createCharacter",
+    key: optionalStringField(input, "key"),
+    name: stringField(input, "name"),
+    description: optionalStringField(input, "description"),
+    lorebookEntryId: nullableStringField(input, "lorebookEntryId"),
+    aliases: stringArrayField(input, "aliases"),
+    isPlayer: booleanField(input, "isPlayer"),
+    personaId: nullableStringField(input, "personaId"),
+  };
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

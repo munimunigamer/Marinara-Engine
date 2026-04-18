@@ -48,7 +48,6 @@ import {
   DEFAULT_WORLD_GRAPH_SYNC_SETTINGS,
   DEFAULT_AGENT_TOOLS,
   resolveWorldGraphSyncSettings,
-  type WorldGraphSyncProfile,
   getDefaultAgentPrompt,
   type AgentPhase,
   type ToolDefinition,
@@ -123,8 +122,6 @@ export function AgentEditor() {
   const [localSourceFileIds, setLocalSourceFileIds] = useState<string[]>([]);
   const [localAutoGenerateAvatars, setLocalAutoGenerateAvatars] = useState(false);
   const [localUseAvatarReferences, setLocalUseAvatarReferences] = useState(false);
-  const [localWorldGraphSyncProfile, setLocalWorldGraphSyncProfile] =
-    useState<WorldGraphSyncProfile>(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncProfile);
   const [localWorldGraphSyncChunkCharLimit, setLocalWorldGraphSyncChunkCharLimit] = useState(
     DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit,
   );
@@ -179,7 +176,6 @@ export function AgentEditor() {
       setLocalAutoGenerateAvatars(settings.autoGenerateAvatars ?? false);
       setLocalUseAvatarReferences(settings.useAvatarReferences ?? false);
       const syncSettings = resolveWorldGraphSyncSettings(settings);
-      setLocalWorldGraphSyncProfile(syncSettings.syncProfile);
       setLocalWorldGraphSyncChunkCharLimit(syncSettings.syncChunkCharLimit);
       setLocalPrompt(dbConfig.promptTemplate || "");
     } else if (builtIn) {
@@ -201,7 +197,6 @@ export function AgentEditor() {
       setLocalSourceFileIds([]);
       setLocalAutoGenerateAvatars(false);
       setLocalUseAvatarReferences(false);
-      setLocalWorldGraphSyncProfile(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncProfile);
       setLocalWorldGraphSyncChunkCharLimit(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit);
       setLocalPrompt("");
     } else {
@@ -223,7 +218,6 @@ export function AgentEditor() {
       setLocalSourceFileIds([]);
       setLocalAutoGenerateAvatars(false);
       setLocalUseAvatarReferences(false);
-      setLocalWorldGraphSyncProfile(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncProfile);
       setLocalWorldGraphSyncChunkCharLimit(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit);
       setLocalPrompt("");
     }
@@ -289,12 +283,6 @@ export function AgentEditor() {
   }, [dirty, closeAgentDetail]);
 
   const openAgentDetail = useUIStore((s) => s.openAgentDetail);
-  const applyWorldGraphSyncProfile = useCallback(
-    (profile: WorldGraphSyncProfile) => {
-      setLocalWorldGraphSyncProfile(profile);
-    },
-    [],
-  );
 
   const handleSave = useCallback(async () => {
     if (!agentDetailId) return;
@@ -317,12 +305,7 @@ export function AgentEditor() {
         ...(localImageConnectionId ? { imageConnectionId: localImageConnectionId } : {}),
         ...(localAutoGenerateAvatars ? { autoGenerateAvatars: true } : {}),
         ...(localUseAvatarReferences ? { useAvatarReferences: true } : {}),
-        ...(isWorldGraphAgent
-          ? {
-              syncProfile: localWorldGraphSyncProfile,
-              syncChunkCharLimit: localWorldGraphSyncChunkCharLimit,
-            }
-          : {}),
+        ...(isWorldGraphAgent ? { syncChunkCharLimit: localWorldGraphSyncChunkCharLimit } : {}),
       },
     };
 
@@ -370,7 +353,6 @@ export function AgentEditor() {
     localSourceFileIds,
     localAutoGenerateAvatars,
     localUseAvatarReferences,
-    localWorldGraphSyncProfile,
     localWorldGraphSyncChunkCharLimit,
     dbConfig,
     builtIn,
@@ -688,56 +670,9 @@ export function AgentEditor() {
             <FieldGroup
               label="World Graph Sync"
               icon={<Layers size="0.875rem" className="text-[var(--primary)]" />}
-              help="Controls how lorebook sync reads entry content and how strict the graph-building pass is. Presets tune the sync strategy, while scene context length and chunk size stay as separate knobs."
+              help="Lorebook sync now uses recursive containment for movement. Locations inside locations are reachable through the containment tree, and chunk size is the main control over sync cost."
             >
               <div className="space-y-4">
-                <div className="space-y-2">
-                  <p className="text-[0.6875rem] font-medium text-[var(--foreground)]">Mode</p>
-                  <div className="grid gap-2 md:grid-cols-3">
-                    {([
-                      {
-                        id: "fast",
-                        label: "Fast",
-                        description: "Lowest cost, lighter validation.",
-                      },
-                      {
-                        id: "balanced",
-                        label: "Balanced",
-                        description: "Default mix of cost and accuracy.",
-                      },
-                      {
-                        id: "full",
-                        label: "Full",
-                        description: "Heavier ingest and stricter repair.",
-                      },
-                    ] as const).map((profile) => {
-                      const selected = localWorldGraphSyncProfile === profile.id;
-                      return (
-                        <button
-                          key={profile.id}
-                          type="button"
-                          onClick={() => {
-                            applyWorldGraphSyncProfile(profile.id);
-                            markDirty();
-                          }}
-                          className={cn(
-                            "rounded-xl px-3 py-3 text-left ring-1 transition-all",
-                            selected
-                              ? "bg-[var(--primary)]/10 text-[var(--foreground)] ring-[var(--primary)]/40"
-                              : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
-                          )}
-                        >
-                          <p className="text-sm font-medium">{profile.label}</p>
-                          <p className="mt-1 text-[0.625rem] leading-relaxed">{profile.description}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                    Mode controls the hidden sync behavior behind the scenes. Only chunk size is editable separately.
-                  </p>
-                </div>
-
                 <div>
                   <label className="block text-[0.6875rem] font-medium text-[var(--foreground)] mb-1.5">
                     Chunk Char Limit
@@ -756,9 +691,13 @@ export function AgentEditor() {
                     className="w-full max-w-xs rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm tabular-nums ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
                   />
                   <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
-                    Independent from mode. Larger chunks reduce API calls but pack more lore into each batch.
+                    Larger chunks reduce API calls but pack more lore into each structured sync step.
                   </p>
                 </div>
+                <p className="text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+                  Containment is recursive. If a school contains classes, each class is reachable through the school
+                  without needing duplicate traversable routes. Explicit routes are reserved for real travel links.
+                </p>
               </div>
             </FieldGroup>
           )}

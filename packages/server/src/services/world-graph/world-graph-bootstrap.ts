@@ -26,17 +26,10 @@ export async function ensureWorldGraphPlayer(db: DB, chatId: string) {
       ? directKey
       : current.runtime.findNode((_, attrs) => {
           if (attrs.kind !== "character") return false;
-          if (attrs.data && typeof attrs.data === "object" && (attrs.data as Record<string, unknown>).isPlayer === true) {
-            return true;
-          }
+          if (attrs.isPlayer === true) return true;
           return attrs.name.trim().toLowerCase() === playerName.toLowerCase();
         });
-
-  const desiredData = {
-    isPlayer: true,
-    personaId: chat.personaId ?? null,
-    aliases: Array.from(new Set(["Player", playerName])).filter(Boolean),
-  };
+  const desiredAliases = Array.from(new Set(["Player", playerName])).filter(Boolean);
 
   if (!existingKey) {
     await storage.runPatch({
@@ -51,7 +44,9 @@ export async function ensureWorldGraphPlayer(db: DB, chatId: string) {
             key: "player",
             name: playerName,
             description: playerDescription,
-            data: desiredData,
+            aliases: desiredAliases,
+            isPlayer: true,
+            personaId: chat.personaId ?? null,
           },
         ],
         events: [`Created player character ${playerName}.`],
@@ -61,14 +56,11 @@ export async function ensureWorldGraphPlayer(db: DB, chatId: string) {
   }
 
   const attrs = current.runtime.getNodeAttributes(existingKey);
-  const currentData = attrs.data ?? {};
-  const aliases = Array.isArray((currentData as Record<string, unknown>).aliases)
-    ? ((currentData as Record<string, unknown>).aliases as unknown[]).map(String)
-    : [];
+  const aliases = Array.isArray(attrs.aliases) ? attrs.aliases.map(String) : [];
   const dataChanged =
-    (currentData as Record<string, unknown>).isPlayer !== true ||
-    (currentData as Record<string, unknown>).personaId !== (chat.personaId ?? null) ||
-    aliases.join("|") !== desiredData.aliases.join("|");
+    attrs.isPlayer !== true ||
+    (attrs.personaId ?? null) !== (chat.personaId ?? null) ||
+    aliases.join("|") !== desiredAliases.join("|");
   const needsUpdate = attrs.name !== playerName || (attrs.description ?? "") !== playerDescription || dataChanged;
 
   if (needsUpdate) {
@@ -84,7 +76,9 @@ export async function ensureWorldGraphPlayer(db: DB, chatId: string) {
             key: existingKey,
             name: playerName,
             description: playerDescription,
-            data: desiredData,
+            aliases: desiredAliases,
+            isPlayer: true,
+            personaId: chat.personaId ?? null,
           },
         ],
         events: [`Updated player character ${playerName}.`],

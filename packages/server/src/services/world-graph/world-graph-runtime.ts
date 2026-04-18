@@ -2,7 +2,6 @@
 // World Graph Runtime (Graphology-backed)
 // ──────────────────────────────────────────────
 import Graph from "graphology";
-import { bidirectional } from "graphology-shortest-path/unweighted.js";
 import type {
   WorldEdgeAttributes,
   WorldEdgeKind,
@@ -14,6 +13,12 @@ import type {
 import type { WorldPatchOperation } from "@marinara-engine/shared";
 
 export type WorldGraphRuntime = Graph<WorldNodeAttributes, WorldEdgeAttributes>;
+export type WorldTraversalNeighborKind = "route" | "parent" | "child";
+
+export interface WorldTraversalNeighbor {
+  key: string;
+  via: WorldTraversalNeighborKind;
+}
 
 export interface WorldPatchApplyResult {
   graph: WorldGraphRuntime;
@@ -86,7 +91,7 @@ export function here(graph: WorldGraphRuntime, character = "Player") {
 export function path(graph: WorldGraphRuntime, fromLocation: string, toLocation: string): WorldRoute {
   const fromKey = findNodeKey(graph, fromLocation, "location");
   const toKey = findNodeKey(graph, toLocation, "location");
-  const route = bidirectional(graph, fromKey, toKey);
+  const route = findLocationPathKeys(graph, fromKey, toKey);
   if (!route) throw new Error(`No route from ${fromLocation} to ${toLocation}`);
   return {
     locations: route.map((key) => graph.getNodeAttribute(key, "name") as string),
@@ -99,12 +104,66 @@ export function explore(graph: WorldGraphRuntime, location: string) {
     location: nodeView(graph, locationKey),
     items: inboundNodes(graph, locationKey, "in", "item"),
     characters: inboundNodes(graph, locationKey, "at", "character"),
-    exits: outboundNodes(graph, locationKey, "connects_to", "location"),
+    exits: getLocalTraversalExitViews(graph, locationKey),
   };
 }
 
 export function explorePath(graph: WorldGraphRuntime, locations: string[]) {
   return locations.map((location) => explore(graph, location));
+}
+
+export function getLocationTraversalNeighbors(graph: WorldGraphRuntime, locationKey: string): WorldTraversalNeighbor[] {
+  const neighbors = new Map<string, WorldTraversalNeighborKind>();
+  const addNeighbor = (key: string, via: WorldTraversalNeighborKind) => {
+    if (key === locationKey) return;
+    if (graph.getNodeAttribute(key, "kind") !== "location") return;
+    if (!neighbors.has(key)) neighbors.set(key, via);
+  };
+
+  for (const edge of graph.outEdges(locationKey)) {
+    const kind = graph.getEdgeAttribute(edge, "kind");
+    const target = graph.target(edge);
+    if (kind === "connects_to") addNeighbor(target, "route");
+    if (kind === "in") addNeighbor(target, "parent");
+  }
+
+  for (const edge of graph.inEdges(locationKey)) {
+    if (graph.getEdgeAttribute(edge, "kind") !== "in") continue;
+    addNeighbor(graph.source(edge), "child");
+  }
+
+  return [...neighbors.entries()].map(([key, via]) => ({ key, via }));
+}
+
+export function hasTraversalNeighbor(graph: WorldGraphRuntime, locationKey: string, targetKey: string) {
+  return getLocationTraversalNeighbors(graph, locationKey).some((neighbor) => neighbor.key === targetKey);
+}
+
+export function findLocationPathKeys(graph: WorldGraphRuntime, fromKey: string, toKey: string): string[] | null {
+  if (fromKey === toKey) return [fromKey];
+
+  const queue: string[] = [fromKey];
+  const previous = new Map<string, string | null>([[fromKey, null]]);
+
+  for (let index = 0; index < queue.length; index++) {
+    const current = queue[index]!;
+    for (const neighbor of getLocationTraversalNeighbors(graph, current)) {
+      if (previous.has(neighbor.key)) continue;
+      previous.set(neighbor.key, current);
+      if (neighbor.key === toKey) {
+        const route: string[] = [];
+        let cursor: string | null = toKey;
+        while (cursor) {
+          route.push(cursor);
+          cursor = previous.get(cursor) ?? null;
+        }
+        return route.reverse();
+      }
+      queue.push(neighbor.key);
+    }
+  }
+
+  return null;
 }
 
 function applyOperation(graph: WorldGraphRuntime, op: WorldPatchOperation): string | null {
@@ -115,7 +174,7 @@ function applyOperation(graph: WorldGraphRuntime, op: WorldPatchOperation): stri
         name: op.name,
         description: op.description,
         tags: op.tags ?? [],
-        data: op.data ?? {},
+        lorebookEntryId: op.lorebookEntryId ?? null,
         x: op.x ?? null,
         y: op.y ?? null,
         floor: op.floor ?? null,
@@ -129,7 +188,10 @@ function applyOperation(graph: WorldGraphRuntime, op: WorldPatchOperation): stri
         kind: "character",
         name: op.name,
         description: op.description,
-        data: op.data ?? {},
+        lorebookEntryId: op.lorebookEntryId ?? null,
+        aliases: op.aliases ?? [],
+        isPlayer: op.isPlayer ?? false,
+        personaId: op.personaId ?? null,
       });
       return `Created character ${graph.getNodeAttribute(key, "name")}.`;
     }
@@ -139,7 +201,7 @@ function applyOperation(graph: WorldGraphRuntime, op: WorldPatchOperation): stri
         name: op.name,
         description: op.description,
         tags: op.tags ?? [],
-        data: op.data ?? {},
+        lorebookEntryId: op.lorebookEntryId ?? null,
       });
       return `Created item ${graph.getNodeAttribute(key, "name")}.`;
     }
@@ -155,15 +217,18 @@ function applyOperation(graph: WorldGraphRuntime, op: WorldPatchOperation): stri
     case "connectLocations": {
       const from = findNodeKey(graph, op.from, "location");
       const to = findNodeKey(graph, op.to, "location");
-      setEdge(graph, from, to, "connects_to", op.data ?? {});
-      if (op.bidirectional ?? true) setEdge(graph, to, from, "connects_to", op.data ?? {});
+      const edgeAttributes = { oneWay: op.oneWay === true ? true : undefined };
+      setEdge(graph, from, to, "connects_to", edgeAttributes);
+      if (!op.oneWay) {
+        setEdge(graph, to, from, "connects_to", {});
+      }
       return `Connected ${graph.getNodeAttribute(from, "name")} to ${graph.getNodeAttribute(to, "name")}.`;
     }
     case "disconnectLocations": {
       const from = findNodeKey(graph, op.from, "location");
       const to = findNodeKey(graph, op.to, "location");
       dropEdges(graph, from, "connects_to", to);
-      if (op.bidirectional ?? true) dropEdges(graph, to, "connects_to", from);
+      if (!op.oneWay) dropEdges(graph, to, "connects_to", from);
       return `Disconnected ${graph.getNodeAttribute(from, "name")} from ${graph.getNodeAttribute(to, "name")}.`;
     }
     case "placeLocation": {
@@ -171,7 +236,7 @@ function applyOperation(graph: WorldGraphRuntime, op: WorldPatchOperation): stri
       const parent = findNodeKey(graph, op.parent, "location");
       if (location === parent) throw new Error("A location cannot contain itself");
       dropEdges(graph, location, "in");
-      setEdge(graph, location, parent, "in", op.data ?? {});
+      setEdge(graph, location, parent, "in", {});
       return `${graph.getNodeAttribute(location, "name")} was placed inside ${graph.getNodeAttribute(parent, "name")}.`;
     }
     case "moveCharacter": {
@@ -236,15 +301,11 @@ function updateNode(
   graph: WorldGraphRuntime,
   value: string,
   kind: WorldNodeKind,
-  updates: Partial<WorldNodeAttributes> & { data?: Record<string, unknown> },
+  updates: Partial<WorldNodeAttributes>,
 ) {
   const key = findNodeKey(graph, value, kind);
-  const current = graph.getNodeAttributes(key);
   const sanitized = sanitizeNodeUpdates(updates);
-  graph.mergeNodeAttributes(key, {
-    ...sanitized,
-    data: sanitized.data ? { ...(current.data ?? {}), ...sanitized.data } : current.data,
-  });
+  graph.mergeNodeAttributes(key, sanitized);
 }
 
 function setEdge(
@@ -252,21 +313,20 @@ function setEdge(
   source: string,
   target: string,
   kind: WorldEdgeKind,
-  data: Record<string, unknown>,
+  attributes: Partial<WorldEdgeAttributes>,
 ) {
   const key = edgeKey(source, kind, target);
   const existing = findEdgeByKind(graph, source, target, kind);
   if (existing) {
-    const current = graph.getEdgeAttributes(existing);
     graph.mergeEdgeAttributes(existing, {
       kind,
-      data: { ...(current.data ?? {}), ...data },
+      ...attributes,
     });
     dropDuplicateKindEdges(graph, source, target, kind, existing);
     return;
   }
 
-  graph.addDirectedEdgeWithKey(key, source, target, { kind, data });
+  graph.addDirectedEdgeWithKey(key, source, target, { kind, ...attributes });
 }
 
 function dropEdges(graph: WorldGraphRuntime, source: string, kind: WorldEdgeKind, target?: string) {
@@ -276,6 +336,12 @@ function dropEdges(graph: WorldGraphRuntime, source: string, kind: WorldEdgeKind
     if (graph.getEdgeAttribute(edge, "kind") !== kind) continue;
     graph.dropEdge(edge);
   }
+}
+
+export function getLocalTraversalExitViews(graph: WorldGraphRuntime, locationKey: string) {
+  return getLocationTraversalNeighbors(graph, locationKey)
+    .filter((neighbor) => neighbor.via !== "route" || isVisibleLocation(graph, neighbor.key))
+    .map((neighbor) => nodeView(graph, neighbor.key));
 }
 
 function outboundNodes(graph: WorldGraphRuntime, source: string, edgeKind: WorldEdgeKind, targetKind: WorldNodeKind) {
@@ -303,6 +369,11 @@ export function nodeView(graph: WorldGraphRuntime, key: string) {
   };
 }
 
+function isVisibleLocation(graph: WorldGraphRuntime, key: string) {
+  const attrs = graph.getNodeAttributes(key);
+  return attrs.kind !== "location" || attrs.revealed !== false || attrs.visited === true;
+}
+
 function edgeKey(source: string, kind: WorldEdgeKind, target: string) {
   return `${source}:${kind}:${target}`;
 }
@@ -325,19 +396,17 @@ function dropDuplicateKindEdges(
   }
 }
 
-function sanitizeNodeUpdates(updates: Partial<WorldNodeAttributes> & { data?: Record<string, unknown> }) {
-  const { data, ...rest } = updates as Partial<WorldNodeAttributes> & {
-    data?: Record<string, unknown>;
+function sanitizeNodeUpdates(updates: Partial<WorldNodeAttributes>) {
+  const rest = updates as Partial<WorldNodeAttributes> & {
     type?: string;
     key?: string;
   };
 
-  const sanitized: Partial<WorldNodeAttributes> & { data?: Record<string, unknown> } = {};
+  const sanitized: Partial<WorldNodeAttributes> = {};
   for (const [field, value] of Object.entries(rest)) {
     if (field === "type" || field === "key") continue;
     if (value === undefined) continue;
     (sanitized as Record<string, unknown>)[field] = value;
   }
-  if (data) sanitized.data = data;
   return sanitized;
 }
