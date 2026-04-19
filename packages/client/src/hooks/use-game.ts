@@ -224,6 +224,7 @@ export function useMoveOnMap() {
     onSuccess: (res, variables) => {
       store.getState().setCurrentMap(res.map);
       qc.invalidateQueries({ queryKey: chatKeys.detail(variables.chatId) });
+      qc.invalidateQueries({ queryKey: [...gameKeys.all, "journal", variables.chatId] });
     },
   });
 }
@@ -334,8 +335,17 @@ export function useCombatRound() {
 
 export function useCombatLoot() {
   return useMutation({
-    mutationFn: (data: { chatId: string; enemyCount: number }) =>
-      api.post<{ drops: Array<{ name: string; quantity?: number }> }>("/game/combat/loot", data),
+    mutationFn: async (data: { chatId: string; enemyCount: number }) => {
+      const res = await api.post<{
+        drops: Array<{ item?: { name?: string | null } | null; quantity?: number | null } | null>;
+      }>("/game/combat/loot", data);
+
+      return {
+        drops: (res.drops ?? [])
+          .filter((drop): drop is NonNullable<(typeof res.drops)[number]> => !!drop?.item?.name)
+          .map((drop) => ({ name: drop.item!.name!, quantity: drop.quantity ?? undefined })),
+      };
+    },
   });
 }
 
@@ -408,14 +418,19 @@ export function useUpdateReputation() {
     onSuccess: (res, variables) => {
       store.getState().setNpcs(res.npcs as any[]);
       qc.invalidateQueries({ queryKey: chatKeys.detail(variables.chatId) });
+      qc.invalidateQueries({ queryKey: [...gameKeys.all, "journal", variables.chatId] });
     },
   });
 }
 
 export function useJournalEntry() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: { chatId: string; type: string; data: Record<string, unknown> }) =>
       api.post<{ journal: unknown }>("/game/journal/entry", data),
+    onSuccess: (_, variables) => {
+      qc.invalidateQueries({ queryKey: [...gameKeys.all, "journal", variables.chatId] });
+    },
   });
 }
 

@@ -49,6 +49,72 @@ const SCENE_ANALYSIS_MAX_TOKENS = 4096;
 /** Fixed context size for scene analysis — narration + asset lists + output headroom. */
 const SCENE_ANALYSIS_CONTEXT_SIZE = 16_384;
 
+function getLoadErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function isGemma4ArchitectureError(err: unknown): boolean {
+  const message = getLoadErrorMessage(err).toLowerCase();
+  return message.includes("unknown model architecture") && message.includes("gemma4");
+}
+
+function formatModelLoadError(err: unknown): Error {
+  if (isGemma4ArchitectureError(err)) {
+    return new Error(
+      "The local Gemma runtime is too old to load Gemma 4. Restart Marinara Engine so it can rebuild llama.cpp, then try again.",
+    );
+  }
+  return err instanceof Error ? err : new Error(getLoadErrorMessage(err));
+}
+
+async function loadModelWithGpuPreference(
+  llama: { loadModel: (opts: Record<string, unknown>) => Promise<unknown> },
+  modelPath: string,
+  config: ReturnType<typeof sidecarModelService.getConfig>,
+): Promise<unknown> {
+  const baseOptions = {
+    modelPath,
+    // Enable FA at model level so GPU layer auto-fitting accounts for the
+    // reduced memory footprint of flash attention.
+    defaultContextFlashAttention: true,
+  };
+
+  if (config.gpuLayers !== -1) {
+    console.log(`[sidecar] Loading model with user-configured gpuLayers=${config.gpuLayers}`);
+    try {
+      return await llama.loadModel({ ...baseOptions, gpuLayers: config.gpuLayers });
+    } catch (err) {
+      throw formatModelLoadError(err);
+    }
+  }
+
+  try {
+    console.log("[sidecar] Loading model with gpuLayers=max (prefer full GPU offload)");
+    return await llama.loadModel({ ...baseOptions, gpuLayers: "max" });
+  } catch (err) {
+    if (isGemma4ArchitectureError(err)) {
+      throw formatModelLoadError(err);
+    }
+
+    console.warn(
+      `[sidecar] Full GPU offload failed (${getLoadErrorMessage(err)}). Retrying with fitted auto GPU layers.`,
+    );
+
+    try {
+      return await llama.loadModel({
+        ...baseOptions,
+        gpuLayers: {
+          min: 1,
+          fitContext: { contextSize: Math.max(config.contextSize, SCENE_ANALYSIS_CONTEXT_SIZE) },
+        },
+      });
+    } catch (fallbackErr) {
+      throw formatModelLoadError(fallbackErr);
+    }
+  }
+}
+
 /** Try to import node-llama-cpp. Returns null if not installed. */
 async function getLlamaModule(): Promise<Record<string, unknown> | null> {
   if (llamaModuleLoaded) return llamaModule;
@@ -85,18 +151,16 @@ async function ensureModel(): Promise<unknown> {
 
   try {
     const llama = (await ensureLlama()) as { loadModel: (opts: Record<string, unknown>) => Promise<unknown> };
-    loadedModel = await llama.loadModel({
-      modelPath,
-      gpuLayers: config.gpuLayers === -1 ? "auto" : config.gpuLayers,
-      // Enable FA at model level so GPU layer auto-fitting accounts for the
-      // reduced memory footprint of flash attention.
-      defaultContextFlashAttention: true,
-    });
+    loadedModel = await loadModelWithGpuPreference(llama, modelPath, config);
+    const resolvedGpuLayers = (loadedModel as { gpuLayers?: number } | null)?.gpuLayers;
+    console.log(
+      `[sidecar] Model loaded (gpuLayers=${resolvedGpuLayers ?? "unknown"}, contextSize=${config.contextSize})`,
+    );
     sidecarModelService.setStatus("ready");
     return loadedModel;
   } catch (err) {
     sidecarModelService.setStatus("error");
-    throw err;
+    throw formatModelLoadError(err);
   }
 }
 

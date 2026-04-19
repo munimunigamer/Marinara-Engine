@@ -39,6 +39,7 @@ import { processReputationActions } from "../services/game/reputation.service.js
 import { createCheckpointService, type CheckpointTrigger } from "../services/game/checkpoint.service.js";
 import { resolveSkillCheck, attributeModifier, getGoverningAttribute } from "../services/game/skill-check.service.js";
 import { applyAllSegmentEdits } from "../services/game/segment-edits.js";
+import { processLorebooks } from "../services/lorebook/index.js";
 import {
   applyMoraleEvent,
   getMoraleTier,
@@ -62,6 +63,7 @@ import type {
   GameSetupConfig,
   GameMap,
   GameNpc,
+  QuestProgress,
   SessionSummary,
   PartyArc,
 } from "@marinara-engine/shared";
@@ -130,6 +132,7 @@ const gameSetupConfigSchema = z.object({
   artStylePrompt: z.string().max(500).optional(),
   activeLorebookIds: z.array(z.string()).optional(),
   enableCustomWidgets: z.boolean().optional(),
+  language: z.string().min(1).max(100).optional(),
 });
 
 const createGameSchema = z.object({
@@ -345,11 +348,209 @@ function parseJSON(raw: string): unknown {
   return JSON.parse(cleaned);
 }
 
+function parseStoredJson<T>(raw: unknown): T | null {
+  if (raw == null) return null;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return null;
+    }
+  }
+  return raw as T;
+}
+
+function normalizeJournalMatch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function locationMatches(candidate: string, aliases: string[]): boolean {
+  const candidateKey = normalizeJournalMatch(candidate);
+  if (!candidateKey) return false;
+
+  return aliases.some((alias) => {
+    const aliasKey = normalizeJournalMatch(alias);
+    if (!aliasKey) return false;
+    const shortest = Math.min(candidateKey.length, aliasKey.length);
+    return candidateKey === aliasKey || (shortest >= 4 && (candidateKey.includes(aliasKey) || aliasKey.includes(candidateKey)));
+  });
+}
+
+function getCurrentMapLocation(map: GameMap | null): { name: string; description: string; aliases: string[] } | null {
+  if (!map) return null;
+
+  if (map.type === "node" && typeof map.partyPosition === "string") {
+    const node = map.nodes?.find((entry) => entry.id === map.partyPosition);
+    if (!node) {
+      return {
+        name: map.partyPosition,
+        description: "",
+        aliases: [map.partyPosition],
+      };
+    }
+    return {
+      name: node.label,
+      description: node.description ?? "",
+      aliases: [node.id, node.label],
+    };
+  }
+
+  if (map.type === "grid" && typeof map.partyPosition === "object" && "x" in map.partyPosition) {
+    const position = map.partyPosition;
+    const cell = map.cells?.find((entry) => entry.x === position.x && entry.y === position.y);
+    if (!cell) return null;
+    return {
+      name: cell.label,
+      description: cell.description ?? "",
+      aliases: [cell.label, `${cell.x},${cell.y}`, `${cell.x}:${cell.y}`],
+    };
+  }
+
+  return null;
+}
+
+function collectDiscoveredMapLocations(map: GameMap | null): Array<{ name: string; description: string }> {
+  if (!map) return [];
+
+  if (map.type === "node") {
+    return (map.nodes ?? [])
+      .filter((node) => node.discovered)
+      .map((node) => ({ name: node.label, description: node.description ?? "" }));
+  }
+
+  return (map.cells ?? [])
+    .filter((cell) => cell.discovered)
+    .map((cell) => ({ name: cell.label, description: cell.description ?? "" }));
+}
+
+function buildNpcMetInteraction(npc: GameNpc): string {
+  const location = npc.location?.trim();
+  return location && location.toLowerCase() !== "unknown" ? `Met at ${location}.` : "Met.";
+}
+
+function extractActiveQuests(playerStatsRaw: unknown): QuestProgress[] {
+  const playerStats = parseStoredJson<Record<string, unknown>>(playerStatsRaw);
+  if (!playerStats || !Array.isArray(playerStats.activeQuests)) return [];
+
+  return playerStats.activeQuests.filter(
+    (quest): quest is QuestProgress => !!quest && typeof quest === "object" && typeof (quest as QuestProgress).name === "string",
+  );
+}
+
+function extractPresentCharacterNames(presentCharactersRaw: unknown): string[] {
+  const presentCharacters = parseStoredJson<Array<{ name?: string }>>(presentCharactersRaw);
+  if (!Array.isArray(presentCharacters)) return [];
+  return presentCharacters
+    .map((entry) => entry?.name?.trim())
+    .filter((name): name is string => !!name);
+}
+
+function markNpcsMetByNames(meta: Record<string, unknown>, names: string[]): Record<string, unknown> {
+  if (names.length === 0) return meta;
+
+  const knownNames = new Set(names.map((name) => normalizeJournalMatch(name)));
+  const npcs = (meta.gameNpcs as GameNpc[]) ?? [];
+  let changed = false;
+  const updatedNpcs = npcs.map((npc) => {
+    if (npc.met || !knownNames.has(normalizeJournalMatch(npc.name))) return npc;
+    changed = true;
+    return { ...npc, met: true };
+  });
+
+  return changed ? { ...meta, gameNpcs: updatedNpcs } : meta;
+}
+
+function markNpcsMetAtCurrentLocation(meta: Record<string, unknown>): Record<string, unknown> {
+  const map = (meta.gameMap as GameMap) ?? null;
+  const location = getCurrentMapLocation(map);
+  if (!location) return meta;
+
+  const npcs = (meta.gameNpcs as GameNpc[]) ?? [];
+  let changed = false;
+  const updatedNpcs = npcs.map((npc) => {
+    if (npc.met || !locationMatches(npc.location, location.aliases)) return npc;
+    changed = true;
+    return { ...npc, met: true };
+  });
+
+  return changed ? { ...meta, gameNpcs: updatedNpcs } : meta;
+}
+
+function reconcileJournal(
+  journal: Journal,
+  meta: Record<string, unknown>,
+  activeQuests: QuestProgress[],
+  currentLocation?: string | null,
+): Journal {
+  let next = journal;
+
+  for (const location of collectDiscoveredMapLocations((meta.gameMap as GameMap) ?? null)) {
+    next = addLocationEntry(next, location.name, location.description);
+  }
+
+  const locationName = currentLocation?.trim();
+  if (locationName) {
+    next = addLocationEntry(next, locationName, `The party is at ${locationName}.`);
+  }
+
+  for (const npc of (meta.gameNpcs as GameNpc[]) ?? []) {
+    if (!npc.met) continue;
+    const interaction = buildNpcMetInteraction(npc);
+    const hasInteraction = next.npcLog.some((entry) => entry.npcName === npc.name && entry.interactions.includes(interaction));
+    if (!hasInteraction) {
+      next = addNpcEntry(next, npc, interaction);
+    }
+  }
+
+  for (const quest of activeQuests) {
+    const objectiveRows = Array.isArray(quest.objectives)
+      ? quest.objectives.filter((objective) => !!objective && typeof objective.text === "string")
+      : [];
+    const objectives = objectiveRows.map((objective) => `${objective.completed ? "[Done] " : ""}${objective.text}`);
+    const currentObjective = objectiveRows.find((objective) => !objective.completed)?.text;
+    next = upsertQuest(next, {
+      id: quest.questEntryId || quest.name,
+      name: quest.name,
+      status: quest.completed ? "completed" : "active",
+      description: currentObjective ?? (quest.completed ? `${quest.name} completed.` : `${quest.name} is in progress.`),
+      objectives,
+    });
+  }
+
+  return next;
+}
+
 // ──────────────────────────────────────────────
 // Route Registration
 // ──────────────────────────────────────────────
 
 export async function gameRoutes(app: FastifyInstance) {
+  const buildHydratedGameMeta = async (
+    chatId: string,
+    baseMeta: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const gameStateStore = createGameStateStorage(app.db);
+    const latestState = await gameStateStore.getLatest(chatId);
+
+    let hydratedMeta = baseMeta;
+    const presentCharacterNames = extractPresentCharacterNames(latestState?.presentCharacters);
+    if (presentCharacterNames.length > 0) {
+      hydratedMeta = markNpcsMetByNames(hydratedMeta, presentCharacterNames);
+    }
+
+    const activeQuests = extractActiveQuests(latestState?.playerStats);
+    const currentLocation = typeof latestState?.location === "string" ? latestState.location : null;
+    const currentJournal = (hydratedMeta.gameJournal as Journal) ?? createJournal();
+    return {
+      ...hydratedMeta,
+      gameJournal: reconcileJournal(currentJournal, hydratedMeta, activeQuests, currentLocation),
+    };
+  };
+
   // ── POST /game/create ──
   app.post("/create", async (req) => {
     console.log("[game/create] Received request");
@@ -516,6 +717,28 @@ export async function gameRoutes(app: FastifyInstance) {
       }
     }
 
+    let setupLorebookContext: string | undefined;
+    if ((setupConfig.activeLorebookIds?.length ?? 0) > 0) {
+      const lorebookResult = await processLorebooks(app.db, [], null, {
+        activeLorebookIds: setupConfig.activeLorebookIds,
+      });
+      const combinedLore = [
+        lorebookResult.worldInfoBefore,
+        ...lorebookResult.depthEntries.map((entry) => entry.content),
+        lorebookResult.worldInfoAfter,
+      ]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join("\n\n");
+      if (combinedLore) {
+        setupLorebookContext = combinedLore;
+        console.log(
+          "[game/setup] Injecting %d constant lorebook entries into world generation",
+          lorebookResult.totalEntries,
+        );
+      }
+    }
+
     const messages: ChatMessage[] = [
       {
         role: "system",
@@ -525,6 +748,8 @@ export async function gameRoutes(app: FastifyInstance) {
           partyCards: partyCards.length > 0 ? partyCards : undefined,
           gmCharacterCard: gmCharacterCard || null,
           enableCustomWidgets: setupConfig.enableCustomWidgets,
+          lorebookContext: setupLorebookContext,
+          language: setupConfig.language,
         }),
       },
       {
@@ -552,6 +777,18 @@ export async function gameRoutes(app: FastifyInstance) {
 
     const setupOptions = gameGenOptions(conn.model, {
       maxTokens: 16384,
+      // Force streamed upstream tokens even though /game/setup returns plain JSON.
+      // Local backends often hold non-streaming responses until the full world is
+      // finished, which makes long first-turn setup look idle and trip timeouts.
+      onToken: (() => {
+        const setupStartTime = Date.now();
+        let sawFirstToken = false;
+        return (chunk: string) => {
+          if (!chunk || sawFirstToken) return;
+          sawFirstToken = true;
+          console.log("[game/setup] First streamed token received after %d ms", Date.now() - setupStartTime);
+        };
+      })(),
     });
     console.log(
       "[game/setup] Sending to provider=%s model=%s baseUrl=%s options=%s",
@@ -815,7 +1052,8 @@ export async function gameRoutes(app: FastifyInstance) {
       }
     }
 
-    await chats.updateMetadata(chatId, updates);
+    const hydratedUpdates = await buildHydratedGameMeta(chatId, updates);
+    await chats.updateMetadata(chatId, hydratedUpdates);
 
     reply.send({
       setup: setupData,
@@ -1268,7 +1506,8 @@ export async function gameRoutes(app: FastifyInstance) {
     }
 
     const meta = parseMeta(chat.metadata);
-    await chats.updateMetadata(chatId, { ...meta, gameMap: map });
+    const hydratedMeta = await buildHydratedGameMeta(chatId, { ...meta, gameMap: map });
+    await chats.updateMetadata(chatId, hydratedMeta);
 
     return { map };
   });
@@ -1303,7 +1542,9 @@ export async function gameRoutes(app: FastifyInstance) {
       }
     }
 
-    await chats.updateMetadata(chatId, { ...meta, gameMap: updatedMap });
+    const nextMeta = markNpcsMetAtCurrentLocation({ ...meta, gameMap: updatedMap });
+    const hydratedMeta = await buildHydratedGameMeta(chatId, nextMeta);
+    await chats.updateMetadata(chatId, hydratedMeta);
 
     return { map: updatedMap };
   });
@@ -1593,9 +1834,10 @@ export async function gameRoutes(app: FastifyInstance) {
     const currentNpcs = (meta.gameNpcs as GameNpc[]) ?? [];
     const { npcs: updatedNpcs, changes, milestones } = processReputationActions(currentNpcs, actions);
 
-    await chats.updateMetadata(chatId, { ...meta, gameNpcs: updatedNpcs });
+    const hydratedMeta = await buildHydratedGameMeta(chatId, { ...meta, gameNpcs: updatedNpcs });
+    await chats.updateMetadata(chatId, hydratedMeta);
 
-    return { npcs: updatedNpcs, changes, milestones };
+    return { npcs: (hydratedMeta.gameNpcs as GameNpc[]) ?? updatedNpcs, changes, milestones };
   });
 
   // ── POST /game/journal/entry ──
@@ -1654,7 +1896,12 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!chat) throw new Error("Chat not found");
 
     const meta = parseMeta(chat.metadata);
-    const journal = (meta.gameJournal as Journal) ?? createJournal();
+    const hydratedMeta = await buildHydratedGameMeta(req.params.chatId, meta);
+    const originalJournal = (meta.gameJournal as Journal) ?? createJournal();
+    const journal = (hydratedMeta.gameJournal as Journal) ?? createJournal();
+    if (JSON.stringify(journal) !== JSON.stringify(originalJournal)) {
+      await chats.updateMetadata(req.params.chatId, hydratedMeta);
+    }
     const sessionNumber = (meta.gameSessionNumber as number) ?? 1;
     const playerNotes = (meta.gamePlayerNotes as string) ?? "";
 

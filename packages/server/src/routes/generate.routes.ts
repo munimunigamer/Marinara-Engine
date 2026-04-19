@@ -2488,6 +2488,7 @@ export async function generateRoutes(app: FastifyInstance) {
           partyNames: gmCtx.partyNames,
           playerName: gmCtx.playerName,
           characterSprites: gmCtx.characterSprites,
+          language: gmCtx.language,
           talkToParty,
           playerInventory: (() => {
             try {

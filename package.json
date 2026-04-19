@@ -1,6 +1,6 @@
 {
   "name": "marinara-engine",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "description": "AI Chat & Roleplay Frontend — Conversation, Roleplay, Visual Novel",
   "author": "Marianna",
@@ -32,7 +32,7 @@
     "db:generate": "pnpm --filter @marinara-engine/server db:generate",
     "db:migrate": "pnpm --filter @marinara-engine/server db:migrate",
     "clean": "pnpm -r --if-present run clean && node ./scripts/clean-workspace.mjs",
-    "sidecar:build": "cd packages/server && npx node-llama-cpp source download --release latest --noUsageExample"
+    "sidecar:build": "cd packages/server && pnpm exec node-llama-cpp source download --release latest --noUsageExample"
   },
   "devDependencies": {
     "esbuild": "^0.27.3",

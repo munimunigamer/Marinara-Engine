@@ -586,106 +586,108 @@ export function ChatSettingsDrawer({
           </button>
         </div>
 
-        {/* Chat Settings Preset bar */}
-        <div className="flex flex-col gap-2 border-b border-[var(--border)] px-4 py-3">
-          <input
-            ref={presetFileInputRef}
-            type="file"
-            accept=".json,application/json"
-            className="hidden"
-            onChange={handleImportFile}
-          />
-          {/* Dropdown / rename input + help */}
-          <div className="flex items-center gap-2">
-            {renamingPreset ? (
-              <input
-                value={renamePresetVal}
-                onChange={(e) => setRenamePresetVal(e.target.value)}
-                onBlur={handleCommitRenamePreset}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleCommitRenamePreset();
-                  else if (e.key === "Escape") setRenamingPreset(false);
-                }}
-                autoFocus
-                maxLength={120}
-                className="flex-1 min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-[var(--primary)]/40"
-              />
-            ) : (
-              <select
-                value={selectedChatPreset?.id ?? ""}
-                onChange={(e) => handleSelectPreset(e.target.value)}
-                title="Apply a chat-settings preset to this chat"
-                className="flex-1 min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
-              >
-                {presetList.length === 0 && <option value="">Loading…</option>}
-                {presetList.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.isDefault ? "Default" : p.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <HelpTooltip
-              side="left"
-              text="Presets bundle this chat's connection, prompt preset, agents, tools, translation, memory recall, advanced parameters, and other settings. They never touch your characters, persona, lorebooks, sprites, summary, tags, or scene prompt — those stay tied to the chat."
+        {/* Chat Settings Preset bar — hidden in Game Mode (not designed for it) */}
+        {!isGame && (
+          <div className="flex flex-col gap-2 border-b border-[var(--border)] px-4 py-3">
+            <input
+              ref={presetFileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleImportFile}
             />
+            {/* Dropdown / rename input + help */}
+            <div className="flex items-center gap-2">
+              {renamingPreset ? (
+                <input
+                  value={renamePresetVal}
+                  onChange={(e) => setRenamePresetVal(e.target.value)}
+                  onBlur={handleCommitRenamePreset}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCommitRenamePreset();
+                    else if (e.key === "Escape") setRenamingPreset(false);
+                  }}
+                  autoFocus
+                  maxLength={120}
+                  className="flex-1 min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-[var(--primary)]/40"
+                />
+              ) : (
+                <select
+                  value={selectedChatPreset?.id ?? ""}
+                  onChange={(e) => handleSelectPreset(e.target.value)}
+                  title="Apply a chat-settings preset to this chat"
+                  className="flex-1 min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                >
+                  {presetList.length === 0 && <option value="">Loading…</option>}
+                  {presetList.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.isDefault ? "Default" : p.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <HelpTooltip
+                side="left"
+                text="Presets bundle this chat's connection, prompt preset, agents, tools, translation, memory recall, advanced parameters, and other settings. They never touch your characters, persona, lorebooks, sprites, summary, tags, or scene prompt — those stay tied to the chat."
+              />
+            </div>
+            {/* Single row of all preset actions */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handleSaveIntoPreset}
+                disabled={!selectedChatPreset || selectedChatPreset.isDefault}
+                title={
+                  selectedChatPreset?.isDefault
+                    ? "Cannot save into the Default preset"
+                    : "Save current chat settings into this preset"
+                }
+                className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Save size="0.875rem" />
+              </button>
+              <button
+                onClick={handleStartRenamePreset}
+                disabled={!selectedChatPreset || selectedChatPreset.isDefault}
+                title={selectedChatPreset?.isDefault ? "Cannot rename the Default preset" : "Rename preset"}
+                className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Pencil size="0.875rem" />
+              </button>
+              <button
+                onClick={handleSaveAsPreset}
+                disabled={!selectedChatPreset}
+                title="Save current chat settings as a new preset"
+                className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <FilePlus2 size="0.875rem" />
+              </button>
+              <span className="mx-1 h-4 w-px shrink-0 bg-[var(--border)]" aria-hidden />
+              <button
+                onClick={handleImportClick}
+                title="Import preset (.json)"
+                className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+              >
+                <Upload size="0.875rem" />
+              </button>
+              <button
+                onClick={handleExportPreset}
+                disabled={!selectedChatPreset}
+                title="Export preset (.json)"
+                className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Download size="0.875rem" />
+              </button>
+              <button
+                onClick={handleDeletePreset}
+                disabled={!selectedChatPreset || selectedChatPreset.isDefault}
+                title={selectedChatPreset?.isDefault ? "Cannot delete the Default preset" : "Delete preset"}
+                className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Trash2 size="0.875rem" />
+              </button>
+            </div>
           </div>
-          {/* Single row of all preset actions */}
-          <div className="flex items-center gap-1">
-            <button
-              onClick={handleSaveIntoPreset}
-              disabled={!selectedChatPreset || selectedChatPreset.isDefault}
-              title={
-                selectedChatPreset?.isDefault
-                  ? "Cannot save into the Default preset"
-                  : "Save current chat settings into this preset"
-              }
-              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Save size="0.875rem" />
-            </button>
-            <button
-              onClick={handleStartRenamePreset}
-              disabled={!selectedChatPreset || selectedChatPreset.isDefault}
-              title={selectedChatPreset?.isDefault ? "Cannot rename the Default preset" : "Rename preset"}
-              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Pencil size="0.875rem" />
-            </button>
-            <button
-              onClick={handleSaveAsPreset}
-              disabled={!selectedChatPreset}
-              title="Save current chat settings as a new preset"
-              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <FilePlus2 size="0.875rem" />
-            </button>
-            <span className="mx-1 h-4 w-px shrink-0 bg-[var(--border)]" aria-hidden />
-            <button
-              onClick={handleImportClick}
-              title="Import preset (.json)"
-              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-            >
-              <Upload size="0.875rem" />
-            </button>
-            <button
-              onClick={handleExportPreset}
-              disabled={!selectedChatPreset}
-              title="Export preset (.json)"
-              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Download size="0.875rem" />
-            </button>
-            <button
-              onClick={handleDeletePreset}
-              disabled={!selectedChatPreset || selectedChatPreset.isDefault}
-              title={selectedChatPreset?.isDefault ? "Cannot delete the Default preset" : "Delete preset"}
-              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Trash2 size="0.875rem" />
-            </button>
-          </div>
-        </div>
+        )}
 
         <div className="flex-1 overflow-y-auto">
           {/* Chat Name */}

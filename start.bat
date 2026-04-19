@@ -155,14 +155,28 @@ if not exist "packages\client\dist" (
     call pnpm build:client
 )
 
-:: Sidecar (local model) - rebuild native addon if user has a model downloaded
+:: Sidecar (local model) - rebuild native addon if missing or stale
+set "SIDECAR_RUNTIME_STAMP=packages\server\data\models\sidecar-runtime-stamp.txt"
+set "SIDECAR_RUNTIME_BUILD_ID=gemma4-runtime-v1"
 if exist "packages\server\data\models\sidecar-config.json" (
+    set "NEED_SIDECAR_BUILD="
     set "LLAMA_ADDON_FOUND="
     for /f "delims=" %%F in ('dir /s /b "node_modules\.pnpm\*llama-addon.node" 2^>nul') do set "LLAMA_ADDON_FOUND=1"
-    if not defined LLAMA_ADDON_FOUND (
-        echo  [..] Building sidecar native addon ^(first time, may take a few minutes^)...
+    if not defined LLAMA_ADDON_FOUND set "NEED_SIDECAR_BUILD=1"
+    if not defined NEED_SIDECAR_BUILD (
+        set "CURRENT_SIDECAR_STAMP="
+        if exist "%SIDECAR_RUNTIME_STAMP%" set /p CURRENT_SIDECAR_STAMP=<"%SIDECAR_RUNTIME_STAMP%"
+        if /I not "!CURRENT_SIDECAR_STAMP!"=="%SIDECAR_RUNTIME_BUILD_ID%" set "NEED_SIDECAR_BUILD=1"
+    )
+    if defined NEED_SIDECAR_BUILD (
+        echo  [..] Rebuilding sidecar runtime for Gemma 4 support ^(may take a few minutes^)...
         call pnpm sidecar:build
-        echo  [OK] Sidecar addon built
+        if errorlevel 1 (
+            echo  [WARN] Sidecar addon build failed. The local Gemma model may not load until this succeeds.
+        ) else (
+            >"%SIDECAR_RUNTIME_STAMP%" echo %SIDECAR_RUNTIME_BUILD_ID%
+            echo  [OK] Sidecar addon ready
+        )
     )
 )
 

@@ -312,6 +312,9 @@ export function GameSurface({
   const [combatParty, setCombatParty] = useState<Combatant[] | null>(null);
   const [combatEnemies, setCombatEnemies] = useState<Combatant[] | null>(null);
   const [pendingEncounter, setPendingEncounter] = useState<CombatEncounterTag | null>(null);
+  const [queuedEncounter, setQueuedEncounter] = useState<{ encounter: CombatEncounterTag; messageId: string } | null>(
+    null,
+  );
   const [pendingSkillCheck, setPendingSkillCheck] = useState<import("@marinara-engine/shared").SkillCheckResult | null>(
     null,
   );
@@ -411,6 +414,22 @@ export function GameSurface({
   const lastProcessedMsgRef = useRef<string | null>(null);
   const weatherMsgRef = useRef<string | null>(null);
   const sceneAnalysisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const introPresentationStorageKey = `game-intro-presented:${activeChatId}`;
+  const assistantTurnCount = useMemo(
+    () => messages.filter((m) => (m.role === "assistant" || m.role === "narrator") && !!m.content.trim()).length,
+    [messages],
+  );
+  const [introPresented, setIntroPresented] = useState(false);
+
+  useEffect(() => {
+    let persisted = false;
+    try {
+      persisted = localStorage.getItem(introPresentationStorageKey) === "1";
+    } catch {
+      persisted = false;
+    }
+    setIntroPresented(persisted || assistantTurnCount > 1);
+  }, [introPresentationStorageKey, assistantTurnCount]);
 
   // Clear stale party dialogue when switching chats (M7)
   const prevActiveChatRef = useRef(activeChatId);
@@ -419,6 +438,11 @@ export function GameSurface({
     prevActiveChatRef.current = activeChatId;
     setPartyDialogue([]);
     setPartyChatMessageId(null);
+    setQueuedEncounter(null);
+    setPendingEncounter(null);
+    setCombatParty(null);
+    setCombatEnemies(null);
+    setNarrationDone(false);
     lastProcessedMsgRef.current = null;
     // Reset inventory/readables for the new chat
     setInventoryItems((chatMeta.gameInventory as Array<{ name: string; quantity: number }>) ?? []);
@@ -613,6 +637,26 @@ export function GameSurface({
   const latestAssistantMsgRef = useRef(latestAssistantMsg);
   latestAssistantMsgRef.current = latestAssistantMsg;
 
+  const latestNarrationText = useMemo(
+    () => (latestAssistantMsg?.content ? parseGmTags(latestAssistantMsg.content).cleanContent.trim() : ""),
+    [latestAssistantMsg?.content],
+  );
+
+  const hasCombatResultAfterMessage = useCallback(
+    (messageId: string) => {
+      const messageIndex = messages.findIndex((m) => m.id === messageId);
+      if (messageIndex < 0) return false;
+      for (let i = messageIndex + 1; i < messages.length; i++) {
+        const msg = messages[i]!;
+        if (msg.role === "user" && msg.content.includes("[combat_result]")) {
+          return true;
+        }
+      }
+      return false;
+    },
+    [messages],
+  );
+
   // ── Scene preparation gating ──
   // Track which message has had its scene effects prepared so narration
   // isn't displayed until backgrounds/music/etc. are ready.
@@ -628,14 +672,12 @@ export function GameSurface({
 
   // ── Restore scene assets (background/music/ambient) from chat metadata on page load ──
   const sceneRestoredRef = useRef(false);
-  const firstTurnPresentedRef = useRef(false);
   const partyDialogueRestoredRef = useRef(false);
 
   if (sceneReadyMsgIdRef.current === undefined && !isMessagesLoading) {
     if (latestAssistantMsg && !isStreaming) {
       // Returning to an existing game — mark scene as ready and skip weather/intro
       isRestoredRef.current = true;
-      firstTurnPresentedRef.current = true; // skip intro gate on restore
       sceneReadyMsgIdRef.current = latestAssistantMsg.id;
       weatherMsgRef.current = latestAssistantMsg.id;
     } else {
@@ -684,7 +726,9 @@ export function GameSurface({
       const tags = parseGmTags(latestAssistantMsg.content);
       if (tags.choices) setActiveChoices(tags.choices);
       if (tags.qte) setActiveQte(tags.qte);
-      if (tags.combatEncounter) setPendingEncounter(tags.combatEncounter);
+      if (tags.combatEncounter && !hasCombatResultAfterMessage(latestAssistantMsg.id)) {
+        setQueuedEncounter({ encounter: tags.combatEncounter, messageId: latestAssistantMsg.id });
+      }
       lastProcessedMsgRef.current = latestAssistantMsg.id;
       // Clear restored flag so subsequent new messages are processed normally
       // by processScene (which skips when isRestoredRef.current is true).
@@ -698,6 +742,7 @@ export function GameSurface({
     chatMeta.gameSceneBackground,
     chatMeta.gameSceneMusic,
     chatMeta.gameSceneAmbient,
+    hasCombatResultAfterMessage,
   ]);
 
   // ── Restore party dialogue from the last [party-chat] message on page load ──
@@ -882,9 +927,11 @@ export function GameSurface({
 
     console.warn("[scene-process] FIRING for message:", msg.id, "| assets:", !!assets);
     lastProcessedMsgRef.current = msg.id;
+    setNarrationDone(false);
     setSceneAnalysisFailed(false);
     setPartyDialogue([]);
     setPartyChatMessageId(null);
+    setQueuedEncounter(null);
     setPendingSegmentEffects([]);
     appliedSegmentsRef.current = new Set();
     // Cancel any pending segment persist timer to prevent it from overwriting our reset
@@ -913,7 +960,7 @@ export function GameSurface({
 
     // Combat encounters always from the main model
     if (tags.combatEncounter) {
-      setPendingEncounter(tags.combatEncounter);
+      setQueuedEncounter({ encounter: tags.combatEncounter, messageId: msg.id });
     }
 
     // Skill checks from GM — resolve server-side
@@ -1546,6 +1593,30 @@ export function GameSurface({
     // The (?) help button will still re-open it on demand.
     setGameTutorialDisabled(true);
   }, [setGameTutorialDisabled]);
+
+  const combatUiActive = gameState === "combat" && !!combatParty && !!combatEnemies;
+
+  useEffect(() => {
+    if (!queuedEncounter || !latestAssistantMsg?.id) return;
+    if (queuedEncounter.messageId !== latestAssistantMsg.id) return;
+    if (pendingEncounter || combatUiActive) return;
+    if (isStreaming || scenePreparing || pendingAssetGeneration || directionsPlaying) return;
+    if (latestNarrationText && !narrationDone) return;
+
+    setPendingEncounter(queuedEncounter.encounter);
+    setQueuedEncounter(null);
+  }, [
+    queuedEncounter,
+    latestAssistantMsg?.id,
+    pendingEncounter,
+    combatUiActive,
+    isStreaming,
+    scenePreparing,
+    pendingAssetGeneration,
+    directionsPlaying,
+    latestNarrationText,
+    narrationDone,
+  ]);
 
   // Build combat combatant arrays when a pending encounter arrives
   useEffect(() => {
@@ -2186,8 +2257,8 @@ export function GameSurface({
   const firstTurnFullyReady = hasEverHadContent && !isStreaming && sceneProcessed && !pendingAssetGeneration;
   // Don't auto-dismiss: wait for user to click Continue after typewriter finishes.
 
-  const awaitingFirstTurn = sessionStatus === "active" && !firstTurnPresentedRef.current;
-  if (sessionStatus === "ready" || startGame.isPending || awaitingFirstTurn) {
+  const awaitingFirstTurn = sessionStatus === "active" && !introPresented;
+  if ((sessionStatus === "ready" && !introPresented) || startGame.isPending || awaitingFirstTurn) {
     const worldOverview = (chatMeta.gameWorldOverview as string) || null;
     const setupConfig = chatMeta.gameSetupConfig as Record<string, unknown> | undefined;
     // Phase: "idle" = show Start button over overview, "intro" = typewriter reveal after clicking Start
@@ -2220,7 +2291,12 @@ export function GameSurface({
                 {firstTurnFullyReady && introTypewriterDone ? (
                   <button
                     onClick={() => {
-                      firstTurnPresentedRef.current = true;
+                      setIntroPresented(true);
+                      try {
+                        localStorage.setItem(introPresentationStorageKey, "1");
+                      } catch {
+                        /* storage unavailable */
+                      }
                       setIntroTypewriterDone(false);
                       // Retry any autoplay-blocked audio now that we have a user gesture
                       audioManager.retryPending();
@@ -2648,7 +2724,7 @@ export function GameSurface({
                 )}
 
                 {/* Scene analysis failed — retry banner (only when narration is still blocked) */}
-                {sceneAnalysisFailed && firstTurnPresentedRef.current && (
+                {sceneAnalysisFailed && introPresented && (
                   <div className="pointer-events-auto absolute bottom-32 left-1/2 z-30 -translate-x-1/2">
                     <div className="flex items-center gap-3 rounded-xl bg-black/80 px-4 py-2.5 shadow-lg backdrop-blur-sm">
                       <AlertTriangle size={14} className="shrink-0 text-amber-400" />
@@ -2674,7 +2750,7 @@ export function GameSurface({
                 {(() => {
                   // Mobile widget slot — rendered inside GameNarration to sit above the narration box
                   const mobileWidgetSlot =
-                    hudWidgets.length > 0 ? (
+                    !combatUiActive && hudWidgets.length > 0 ? (
                       <div className="pointer-events-auto mb-2 flex items-end justify-between md:hidden">
                         <MobileWidgetPanel widgets={normalizedWidgets} position="hud_left" />
                         <MobileWidgetPanel widgets={normalizedWidgets} position="hud_right" />
@@ -2689,7 +2765,7 @@ export function GameSurface({
                       </div>
                     ) : undefined;
 
-                  if (gameState === "combat" && combatParty && combatEnemies) {
+                  if (combatUiActive) {
                     return (
                       <GameCombatUI
                         chatId={activeChatId}
@@ -2899,7 +2975,7 @@ export function GameSurface({
               )}
 
               {/* HUD Widgets - Left & Right, tops aligned */}
-              {hudWidgets.length > 0 && (
+              {!combatUiActive && hudWidgets.length > 0 && (
                 <>
                   {/* Desktop: full widget cards */}
                   <div className="pointer-events-none absolute inset-x-3 bottom-24 z-30 hidden items-start justify-between md:flex">

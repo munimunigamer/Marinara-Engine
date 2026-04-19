@@ -1,12 +1,12 @@
 // ──────────────────────────────────────────────
 // Game: Journal Viewer
 //
-// Browsable auto-journal panel showing quest log,
+// Browsable auto-journal panel showing
 // NPC notes, locations, inventory, and events —
 // all assembled from committed snapshots, no LLM.
 // ──────────────────────────────────────────────
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, MapPin, Swords, ScrollText, Package, Sparkles, Users, PenLine, BookOpen } from "lucide-react";
+import { X, MapPin, Swords, ScrollText, Package, Users, PenLine, BookOpen } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { api } from "../../lib/api-client";
 import { AnimatedText } from "./AnimatedText";
@@ -42,11 +42,10 @@ interface GameJournalProps {
   onClose: () => void;
 }
 
-type TabId = "all" | "quests" | "npcs" | "locations" | "inventory" | "library" | "notes";
+type TabId = "all" | "npcs" | "locations" | "inventory" | "library" | "notes";
 
 const TABS: Array<{ id: TabId; label: string; icon: typeof ScrollText }> = [
   { id: "all", label: "Timeline", icon: ScrollText },
-  { id: "quests", label: "Quests", icon: Sparkles },
   { id: "npcs", label: "NPCs", icon: Users },
   { id: "locations", label: "Map", icon: MapPin },
   { id: "inventory", label: "Items", icon: Package },
@@ -57,7 +56,7 @@ const TABS: Array<{ id: TabId; label: string; icon: typeof ScrollText }> = [
 const TYPE_ICONS: Record<string, typeof ScrollText> = {
   location: MapPin,
   combat: Swords,
-  quest: Sparkles,
+  quest: ScrollText,
   item: Package,
   npc: Users,
   event: ScrollText,
@@ -162,7 +161,6 @@ export function GameJournal({ chatId, npcs, onClose }: GameJournalProps) {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === "all" && <TimelineView entries={journal.entries} />}
-        {activeTab === "quests" && <QuestsView quests={journal.quests} />}
         {activeTab === "npcs" && <NpcsView npcLog={journal.npcLog} npcs={npcs} />}
         {activeTab === "locations" && <LocationsView locations={journal.locations} />}
         {activeTab === "inventory" && <InventoryView items={journal.inventoryLog} />}
@@ -194,49 +192,6 @@ function TimelineView({ entries }: { entries: JournalEntry[] }) {
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function QuestsView({ quests }: { quests: QuestEntry[] }) {
-  const active = quests.filter((q) => q.status === "active");
-  const completed = quests.filter((q) => q.status === "completed");
-  const failed = quests.filter((q) => q.status === "failed");
-
-  if (quests.length === 0) {
-    return <div className="text-center text-xs text-white/40">No quests discovered yet.</div>;
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      {active.length > 0 && <QuestSection title="Active Quests" quests={active} color="text-amber-300" />}
-      {completed.length > 0 && <QuestSection title="Completed" quests={completed} color="text-emerald-300" />}
-      {failed.length > 0 && <QuestSection title="Failed" quests={failed} color="text-red-300" />}
-    </div>
-  );
-}
-
-function QuestSection({ title, quests, color }: { title: string; quests: QuestEntry[]; color: string }) {
-  return (
-    <div>
-      <h3 className={cn("mb-2 text-xs font-semibold uppercase tracking-wide", color)}>{title}</h3>
-      <div className="flex flex-col gap-2">
-        {quests.map((q) => (
-          <div key={q.id} className="rounded-lg border border-white/5 bg-white/3 px-3 py-2">
-            <div className="text-xs font-medium text-white/80">{q.name}</div>
-            <AnimatedText html={q.description} className="mt-0.5 text-[0.625rem] text-white/50" />
-            {q.objectives.length > 0 && (
-              <ul className="mt-1 flex flex-col gap-0.5">
-                {q.objectives.map((obj, i) => (
-                  <li key={i} className="text-[0.625rem] text-white/40">
-                    • {obj}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

@@ -2,11 +2,29 @@
 
 This file is the release-notes source of truth for Marinara Engine. Reuse these entries when publishing GitHub Releases for tags in the `vX.Y.Z` format.
 
+## [1.5.1]
+
+### Changed
+
+- Removed the Quests tab from Game Mode. Game sessions deliberately do not use tracker agents for quests, so the journal now focuses on the code-driven data it actually maintains to avoid excessive generations.
+
+### Fixed
+
+- Returning to an active game session no longer reopens the full-screen world overview and blocks the current scene behind the black intro overlay.
+- Combat encounters now wait until narration and scene presentation finish before opening, and HUD widgets hide during combat and restore correctly afterward.
+- Loot drops now resolve to the correct item names instead of malformed combat-drop payloads.
+- Constant lorebook entries selected for Game Mode are now injected during world generation instead of being skipped during setup.
+- Non-English setup languages now propagate through setup generation and GM output formatting, so game text stays in the selected language.
+- `/game/setup` now streams upstream tokens during first-turn world generation, reducing timeout failures on slower local backends.
+- Map discoveries and NPC meetings now populate the journal from code-owned game state. Locations appear when discovered, and NPCs are logged when first met instead of only after a reputation change.
+- Our built-in Gemma-4 will now target available GPUs during generations.
+- Fixed Gemma-4 issues on Windows.
+
 ## [1.5.0]
 
 ### Added
 
-- Introducing the new **Game Mode**! A cross between a classic roleplay and a visual novel, fully driven by the AI GM! Embark on adventures either solo or with a party of characters of your choice. Or perhaps have one of your characters DM the game for you and others? The games span multiple sessions, and *anything* can happen. The sky is the limit. Well, I guess your wallet, too.
+- Introducing the new **Game Mode**! A cross between a classic roleplay and a visual novel, fully driven by the AI GM! Embark on adventures either solo or with a party of characters of your choice. Or perhaps have one of your characters DM the game for you and others? The games span multiple sessions, and _anything_ can happen. The sky is the limit. Well, I guess your wallet, too.
   - Follow an easy and quick game setup wizard to customize your game, or ask the model to come up with the ideas for you.
   - The game's UI is a cross between RPGs (think Baldur's Gate) and visual novels. Witness dynamically changing dialogues, backgrounds, sprites, ambiance, music, sounds, and weather; all based on your current scene. The mode supports sprites and will show them with different expressions. You have an item inventory, an automatically updated journal storing information about your adventure, and an option to talk to your party whenever you feel like simply chatting with them instead of progressing.
   - Your party, and you, all have unique character cards, secrets, and goals to achieve. Remember to keep morale high.

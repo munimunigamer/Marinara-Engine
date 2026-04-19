@@ -349,6 +349,7 @@ export function buildGmFormatReminder(
     | "playerName"
     | "characterSprites"
     | "playerInventory"
+    | "language"
   > & {
     /** Whether the current turn's player message is prefixed with `[To the party]`. When true, the TALK-TO-PARTY block is appended. */
     talkToParty?: boolean;
@@ -372,6 +373,13 @@ export function buildGmFormatReminder(
   lines.push(
     `<output_format>`,
     `Think HARD about your response first. Remember your Core Responsibilities and the Prose Quality that is expected of you. Then respond, following the output format below. Consider which commands to use and how to keep the player engaged.`,
+    ...(ctx.language && ctx.language.toLowerCase() !== "english"
+      ? [
+          `LANGUAGE (MANDATORY):`,
+          `Write ALL narration, dialogue, descriptions, and game text in ${ctx.language}. Only XML tags, command names, and structured field labels may remain in English.`,
+          ``,
+        ]
+      : []),
     `VISUAL NOVEL STYLE (MANDATORY):`,
     `Every line of your output must use one of these formats:`,
     ` 1. Narration:`,
@@ -579,6 +587,10 @@ export interface SetupPromptContext {
   gmCharacterCard?: string | null;
   /** Enable custom HUD widgets in the game blueprint */
   enableCustomWidgets?: boolean;
+  /** Selected constant lorebook canon to bake into world generation */
+  lorebookContext?: string | null;
+  /** Language for natural-language JSON values */
+  language?: string;
 }
 
 export function buildSetupPrompt(ctx: SetupPromptContext = {}): string {
@@ -619,6 +631,14 @@ export function buildSetupPrompt(ctx: SetupPromptContext = {}): string {
   if (ctx.partyCards?.length) {
     contextSections.push(`<party_info>`, `Party members accompanying the player:`, ...ctx.partyCards, `</party_info>`);
   }
+  if (ctx.lorebookContext?.trim()) {
+    contextSections.push(
+      `<lorebook_context>`,
+      `Selected constant lorebook canon that MUST be treated as true for this world:`,
+      ctx.lorebookContext.trim(),
+      `</lorebook_context>`,
+    );
+  }
 
   return [
     `You are the Game Master preparing a new RPG campaign.`,
@@ -626,6 +646,14 @@ export function buildSetupPrompt(ctx: SetupPromptContext = {}): string {
     ``,
     `Your job: design a complete game world with story, characters, and visual presentation. Do NOT write any narration or opening scene. That happens separately after you build the world.`,
     ``,
+    ...(ctx.language && ctx.language.toLowerCase() !== "english"
+      ? [
+          `<language>`,
+          `Write every natural-language string value in the JSON output in ${ctx.language}. This includes worldOverview, storyArc, plotTwists, descriptions, arcs, labels, and any other prose. Keep ONLY the JSON keys and structural syntax in English.`,
+          `</language>`,
+          ``,
+        ]
+      : []),
     `CRITICAL: Your response MUST be a single JSON object using the EXACT keys shown in the <output_format> template below. Do NOT invent your own keys. Do NOT rename fields. The keys "worldOverview", "storyArc", "plotTwists", "startingMap", "startingNpcs", "partyArcs", "characterCards", and "blueprint" are MANDATORY and must appear at the top level. The system will reject any response that uses different key names.`,
     ``,
     ...(ctx.enableCustomWidgets !== false

@@ -121,7 +121,9 @@ export function upsertQuest(
       q.id === quest.id
         ? {
             ...q,
+            name: quest.name || q.name,
             status: quest.status,
+            description: quest.description || q.description,
             objectives: quest.objectives.length > 0 ? quest.objectives : q.objectives,
             completedAt: quest.status === "completed" ? new Date().toISOString() : q.completedAt,
           }

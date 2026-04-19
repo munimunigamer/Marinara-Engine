@@ -130,15 +130,27 @@ if [ ! -d "packages/client/dist" ]; then
     pnpm build:client
 fi
 
-# ── Sidecar (local model) — rebuild native addon if user has a model downloaded ──
+# ── Sidecar (local model) — rebuild native addon if missing or stale ──
 SIDECAR_CONFIG="packages/server/data/models/sidecar-config.json"
+SIDECAR_RUNTIME_STAMP="packages/server/data/models/sidecar-runtime-stamp.txt"
+SIDECAR_RUNTIME_BUILD_ID="gemma4-runtime-v1"
 if [ -f "$SIDECAR_CONFIG" ]; then
-    # Check if the node-llama-cpp native build is present for the latest llama.cpp release
+    NEED_SIDECAR_BUILD=0
     LLAMA_BUILD_DIR=$(find node_modules/.pnpm -maxdepth 5 -path '*/node-llama-cpp/llama/localBuilds' -type d 2>/dev/null | head -1)
     if [ -z "$LLAMA_BUILD_DIR" ] || [ -z "$(find "$LLAMA_BUILD_DIR" -name 'llama-addon.node' 2>/dev/null | head -1)" ]; then
-        echo "  [..] Building sidecar native addon (first time, may take a few minutes)..."
-        pnpm sidecar:build
-        echo "  [OK] Sidecar addon built"
+        NEED_SIDECAR_BUILD=1
+    elif [ ! -f "$SIDECAR_RUNTIME_STAMP" ] || [ "$(cat "$SIDECAR_RUNTIME_STAMP" 2>/dev/null)" != "$SIDECAR_RUNTIME_BUILD_ID" ]; then
+        NEED_SIDECAR_BUILD=1
+    fi
+
+    if [ "$NEED_SIDECAR_BUILD" = "1" ]; then
+        echo "  [..] Rebuilding sidecar runtime for Gemma 4 support (may take a few minutes)..."
+        if pnpm sidecar:build; then
+            printf '%s\n' "$SIDECAR_RUNTIME_BUILD_ID" > "$SIDECAR_RUNTIME_STAMP"
+            echo "  [OK] Sidecar addon ready"
+        else
+            echo "  [WARN] Sidecar addon build failed. The local Gemma model may not load until this succeeds."
+        fi
     fi
 fi
 

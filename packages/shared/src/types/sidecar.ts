@@ -35,7 +35,7 @@ export interface SidecarConfig {
   useForGameScene: boolean;
   /** Context size for the model. Default 8192. */
   contextSize: number;
-  /** GPU layers to offload (-1 = auto). */
+  /** GPU layers to offload (-1 = prefer full GPU offload, then fall back to auto-fit). */
   gpuLayers: number;
 }
 

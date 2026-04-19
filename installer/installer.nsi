@@ -9,12 +9,9 @@
 !include "FileFunc.nsh"
 !include "WinMessages.nsh"
 
-; ── Download plugin (replaces PowerShell Invoke-WebRequest to reduce AV false positives) ──
-!include "inetc.nsh"
-
 ; ── App metadata ──
 !define APP_NAME "Marinara Engine"
-!define APP_VERSION "1.5.0"
+!define APP_VERSION "1.5.1"
 !define APP_PUBLISHER "Pasta-Devs"
 !define APP_URL "https://github.com/Pasta-Devs/Marinara-Engine"
 !define REPO_URL "https://github.com/Pasta-Devs/Marinara-Engine.git"
@@ -119,8 +116,8 @@ Section "Install" SecInstall
   ${If} $GIT_OK != 0
     DetailPrint "Git not found — attempting automatic install..."
     DetailPrint "Downloading Git for Windows (this may take a minute)..."
-    ; Download Git installer via native NSIS inetc plugin (avoids PowerShell AV triggers)
-    inetc::get /CAPTION "Downloading Git for Windows" /BANNER "Please wait..." "${GIT_DOWNLOAD_URL}" "$TEMP\git-install.exe" /END
+    ; Download Git installer via PowerShell (known-working path used by the v1.4.7 installer)
+    nsExec::ExecToLog 'cmd /c powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri ''${GIT_DOWNLOAD_URL}'' -OutFile ''$TEMP\git-install.exe'' -UseBasicParsing"'
     Pop $0
     ${If} $0 != "OK"
       MessageBox MB_YESNO|MB_ICONEXCLAMATION "\
@@ -163,8 +160,7 @@ Please restart your computer and run this installer again."
   ${If} $NODE_OK != 0
     DetailPrint "Node.js not found — attempting automatic install..."
     DetailPrint "Downloading Node.js LTS (this may take a minute)..."
-    ; Download Node.js via native NSIS inetc plugin (avoids PowerShell AV triggers)
-    inetc::get /CAPTION "Downloading Node.js LTS" /BANNER "Please wait..." "${NODE_DOWNLOAD_URL}" "$TEMP\node-install.msi" /END
+    nsExec::ExecToLog 'cmd /c powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri ''${NODE_DOWNLOAD_URL}'' -OutFile ''$TEMP\node-install.msi'' -UseBasicParsing"'
     Pop $0
     ${If} $0 != "OK"
       MessageBox MB_YESNO|MB_ICONEXCLAMATION "\
