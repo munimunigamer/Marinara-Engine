@@ -129,6 +129,7 @@ export interface AgentContext {
 /** Built-in agent type identifiers. */
 export const BUILT_IN_AGENT_IDS = {
   WORLD_STATE: "world-state",
+  WORLD_GRAPH: "world-graph",
   PROSE_GUARDIAN: "prose-guardian",
   CONTINUITY: "continuity",
   EXPRESSION: "expression",
@@ -225,6 +226,15 @@ export const BUILT_IN_AGENTS: BuiltInAgentMeta[] = [
     phase: "post_processing",
     enabledByDefault: false,
     defaultInjectAsSection: true,
+    category: "tracker",
+  },
+  {
+    id: "world-graph",
+    name: "World Graph",
+    description:
+      "Maintains a navigable RPG-style world map of locations, exits, characters, items, inventory, and recent world events.",
+    phase: "pre_generation",
+    enabledByDefault: false,
     category: "tracker",
   },
   {
@@ -437,6 +447,7 @@ export const BUILT_IN_AGENTS: BuiltInAgentMeta[] = [
 /** Recommended default tools for each built-in agent type. */
 export const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
   "world-state": ["update_game_state"],
+  "world-graph": [],
   "prose-guardian": [],
   continuity: ["search_lorebook"],
   expression: ["set_expression"],

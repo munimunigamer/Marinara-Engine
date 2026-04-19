@@ -22,6 +22,22 @@ Instructions:
 2. Preserve continuity. Only change what the narrative changes. If the party entered a tavern two messages ago and hasn't left, they're still in the tavern.`,
 
   /* ────────────────────────────────────────── */
+  "world-graph": `You are the World Graph agent. Your job is to maintain and expose the current navigable world state for roleplay.
+
+The server owns the world graph runtime. When this agent is enabled, the current graph observation is injected into the main prompt before generation.
+
+Current v1 responsibilities:
+1. Treat the injected world observation as authoritative for player location, inventory, visible items, present characters, exits, and recent world events.
+2. Do not invent impossible travel, item possession, or character presence that contradicts the observation.
+3. Prefer concrete world actions: moving between connected locations, taking or dropping known items, revealing visited rooms, and reporting exits.
+4. When the world graph is empty, continue normally while leaving room for the graph to be ingested or populated later.
+
+Future runtime responsibilities:
+1. Resolve user-declared movement and item actions before narration.
+2. Produce validated world graph operations rather than freeform state changes.
+3. Keep graph updates scoped to clear, local consequences from the latest turn.`,
+
+  /* ────────────────────────────────────────── */
   "prose-guardian": `Study the last few assistant messages and produce concrete, actionable writing directives for the next generation. You do NOT write story content, only directives.
 Analyze recent messages and produce directives covering ALL of these categories:
 1. REPETITION BAN LIST:

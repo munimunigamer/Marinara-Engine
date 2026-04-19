@@ -18,6 +18,7 @@ import type {
   CharacterStat,
   GameState,
   PlayerStats,
+  WorldObservation,
 } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
@@ -60,6 +61,9 @@ import {
 } from "../services/conversation/character-commands.js";
 import { MARI_ASSISTANT_PROMPT } from "../db/seed-mari.js";
 import { executeKnowledgeRetrieval } from "../services/agents/knowledge-retrieval.js";
+import { createWorldGraphStorage } from "../services/world-graph/world-graph.storage.js";
+import { buildWorldObservation } from "../services/world-graph/world-graph-retrieval.js";
+import { ensureWorldGraphPlayer } from "../services/world-graph/world-graph-bootstrap.js";
 import { extractFileText, getSourceFilePath } from "./knowledge-sources.routes.js";
 import { gameStateSnapshots as gameStateSnapshotsTable } from "../db/schema/index.js";
 import { chats as chatsTable } from "../db/schema/index.js";
@@ -164,6 +168,43 @@ function formatAgentInjections(injections: AgentInjection[], wrapFormat: string)
   return parts.join("\n\n");
 }
 
+function formatWorldGraphObservation(observation: WorldObservation): string {
+  const lines: string[] = [];
+  const currentLocation = observation.currentLocation?.attributes;
+  const currentCharacter = observation.currentCharacter?.attributes;
+
+  if (!currentLocation && !currentCharacter && observation.exits.length === 0 && observation.inventory.length === 0) {
+    return "No world graph has been ingested for this chat yet.";
+  }
+
+  lines.push(`Current character: ${currentCharacter?.name ?? "Player not placed"}`);
+  lines.push(`Current location: ${currentLocation?.name ?? "Unknown"}`);
+  if (currentLocation?.description) lines.push(`Location details: ${currentLocation.description}`);
+
+  const inventory = observation.inventory.map((node) => node.attributes.name);
+  lines.push(`Inventory: ${inventory.length ? inventory.join(", ") : "None"}`);
+
+  const visibleItems = observation.visibleItems.map((node) => node.attributes.name);
+  lines.push(`Visible items: ${visibleItems.length ? visibleItems.join(", ") : "None"}`);
+
+  const presentCharacters = observation.presentCharacters
+    .map((node) => node.attributes.name)
+    .filter((name) => name !== currentCharacter?.name);
+  lines.push(`Present characters: ${presentCharacters.length ? presentCharacters.join(", ") : "None"}`);
+
+  const exits = observation.exits.map((node) => node.attributes.name);
+  lines.push(`Exits: ${exits.length ? exits.join(", ") : "None"}`);
+
+  if (observation.recentEvents.length > 0) {
+    lines.push("Recent world events:");
+    for (const event of observation.recentEvents) {
+      lines.push(`- ${event}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 function normalizeChatTopP(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   if (value <= 0) return 1;
@@ -180,6 +221,7 @@ export async function generateRoutes(app: FastifyInstance) {
   const customToolsStore = createCustomToolsStorage(app.db);
   const lorebooksStore = createLorebooksStorage(app.db);
   const regexScriptsStore = createRegexScriptsStorage(app.db);
+  const worldGraphStorage = createWorldGraphStorage(app.db);
 
   /**
    * In-memory cache for OpenAI Responses API encrypted reasoning items.
@@ -1886,16 +1928,19 @@ export async function generateRoutes(app: FastifyInstance) {
             })
           : [];
       for (const builtIn of builtInFallbacks) {
+        const cfg = await agentsStore.ensureBuiltInConfig(builtIn);
+        if (!cfg) continue;
+        const settings = cfg.settings ? JSON.parse(cfg.settings as string) : {};
         // Built-in agents also respect the default-for-agents connection
         const builtInCached = defaultAgentConn ? agentProviderCache.get(defaultAgentConn.id) : null;
         resolvedAgents.push({
-          id: `builtin:${builtIn.id}`,
-          type: builtIn.id,
-          name: builtIn.name,
-          phase: builtIn.phase,
-          promptTemplate: "",
-          connectionId: defaultAgentConn?.id ?? null,
-          settings: {},
+          id: cfg.id,
+          type: cfg.type,
+          name: cfg.name,
+          phase: cfg.phase as string,
+          promptTemplate: cfg.promptTemplate as string,
+          connectionId: (cfg.connectionId as string | null) ?? defaultAgentConn?.id ?? null,
+          settings,
           provider: builtInCached?.provider ?? provider,
           model: builtInCached?.model ?? conn.model,
         });
@@ -3151,6 +3196,7 @@ export async function generateRoutes(app: FastifyInstance) {
         const trackerIds = new Set(BUILT_IN_AGENTS.filter((a) => a.category === "tracker").map((a) => a.id));
         pipelineAgents = pipelineAgents.filter((a) => !trackerIds.has(a.type));
       }
+      const worldGraphAgent = manualTrackers ? null : pipelineAgents.find((a) => a.type === "world-graph");
 
       // Echo Chamber should only fire on fresh user messages, not swipes/regenerates
       if (input.regenerateMessageId) {
@@ -3177,8 +3223,8 @@ export async function generateRoutes(app: FastifyInstance) {
       let contextInjections: AgentInjection[] = [];
       // Static-injection agents don't need LLM calls — they inject prompt text directly
       const STATIC_INJECTION_AGENTS = new Set(["html"]);
-      const SEPARATE_INJECTION_AGENTS = new Set(["knowledge-retrieval"]);
-      const EXCLUDED_FROM_PIPELINE = new Set(["html", "knowledge-retrieval"]);
+      const SEPARATE_INJECTION_AGENTS = new Set(["knowledge-retrieval", "world-graph"]);
+      const EXCLUDED_FROM_PIPELINE = new Set(["html", "knowledge-retrieval", "world-graph"]);
       const hasPreGenAgents = resolvedAgents.some(
         (a) => a.phase === "pre_generation" && !EXCLUDED_FROM_PIPELINE.has(a.type),
       );
@@ -3256,7 +3302,7 @@ export async function generateRoutes(app: FastifyInstance) {
             })()
           : Promise.resolve(null);
 
-        // Run both in parallel
+        // Run separate injectors in parallel
         const [preGenResult, krResult] = await Promise.all([preGenPromise, krPromise]);
         contextInjections = preGenResult;
 
@@ -3415,6 +3461,31 @@ export async function generateRoutes(app: FastifyInstance) {
           const wrapped = formatAgentInjections(contextInjections, wrapFormat);
           finalMessages = injectAtDepth(finalMessages, [{ content: wrapped, role: "system", depth: 0 }]);
         }
+      }
+
+      if (worldGraphAgent) {
+        sendProgress("agents");
+        reply.raw.write(
+          `data: ${JSON.stringify({ type: "agent_start", data: { phase: "pre_generation", agentType: "world-graph" } })}\n\n`,
+        );
+        const startedAt = Date.now();
+        await ensureWorldGraphPlayer(app.db, input.chatId);
+        const { graph, runtime, events } = await worldGraphStorage.getCurrentGraphForChat(input.chatId);
+        const observation = buildWorldObservation(graph.id, runtime, events);
+        const text = formatWorldGraphObservation(observation);
+        const result: AgentResult = {
+          agentId: worldGraphAgent.id,
+          agentType: worldGraphAgent.type,
+          type: "context_injection",
+          data: { text, observation },
+          tokensUsed: 0,
+          durationMs: Date.now() - startedAt,
+          success: true,
+          error: null,
+        };
+        sendAgentEvent(result);
+        const wrapped = formatAgentInjections([{ agentType: "world-graph", text }], wrapFormat);
+        finalMessages = injectAtDepth(finalMessages, [{ content: wrapped, role: "system", depth: 0 }]);
       }
 
       // ────────────────────────────────────────

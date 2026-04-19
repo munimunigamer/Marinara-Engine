@@ -604,6 +604,7 @@ export function ChatArea() {
   const handleRerunTrackers = useCallback(async () => {
     if (!activeChatId || isStreaming || agentProcessing) return;
     const trackerIds = new Set(BUILT_IN_AGENTS.filter((a) => a.category === "tracker").map((a) => a.id));
+    trackerIds.delete("world-graph");
     const types = Array.from(enabledAgentTypes).filter((t) => trackerIds.has(t));
     if (types.length === 0) return;
     await retryAgents(activeChatId, types);

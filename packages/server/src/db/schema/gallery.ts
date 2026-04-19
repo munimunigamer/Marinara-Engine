@@ -2,13 +2,16 @@
 // Schema: Chat Gallery Images
 // ──────────────────────────────────────────────
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
-import { chats } from "./chats.js";
+
+const referencedChats = sqliteTable("chats", {
+  id: text("id").primaryKey(),
+});
 
 export const chatImages = sqliteTable("chat_images", {
   id: text("id").primaryKey(),
   chatId: text("chat_id")
     .notNull()
-    .references(() => chats.id, { onDelete: "cascade" }),
+    .references(() => referencedChats.id, { onDelete: "cascade" }),
   /** File path relative to data/gallery/ */
   filePath: text("file_path").notNull(),
   /** The prompt used to generate this image */

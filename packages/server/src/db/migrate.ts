@@ -361,6 +361,29 @@ const CREATE_TABLES: string[] = [
     value TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS world_graphs (
+    id TEXT PRIMARY KEY NOT NULL,
+    chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    snapshot_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS world_patches (
+    id TEXT PRIMARY KEY NOT NULL,
+    graph_id TEXT NOT NULL REFERENCES world_graphs(id) ON DELETE CASCADE,
+    chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE,
+    source_role TEXT NOT NULL,
+    source_phase TEXT NOT NULL,
+    message_id TEXT,
+    swipe_index INTEGER,
+    status TEXT NOT NULL,
+    code TEXT,
+    patch_json TEXT NOT NULL DEFAULT '{"ops":[],"events":[]}',
+    result_json TEXT,
+    created_at TEXT NOT NULL,
+    committed_at TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS chat_presets (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
@@ -497,6 +520,21 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     definition: "TEXT NOT NULL DEFAULT '[]'",
   },
   {
+    table: "world_graphs",
+    column: "snapshot_json",
+    definition: "TEXT",
+  },
+  {
+    table: "world_patches",
+    column: "patch_json",
+    definition: `TEXT NOT NULL DEFAULT '{"ops":[],"events":[]}'`,
+  },
+  {
+    table: "world_patches",
+    column: "result_json",
+    definition: "TEXT",
+  },
+  {
     table: "api_connections",
     column: "default_parameters",
     definition: "TEXT",
@@ -535,5 +573,10 @@ export async function runMigrations(db: DB) {
     sql.raw(`CREATE INDEX IF NOT EXISTS idx_memory_chunks_chat ON memory_chunks(chat_id, last_message_at DESC)`),
   );
   await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_custom_themes_active ON custom_themes(is_active)`));
+  await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_world_graphs_chat ON world_graphs(chat_id)`));
+  await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_world_patches_graph_status ON world_patches(graph_id, status)`));
+  await db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS idx_world_patches_message ON world_patches(message_id, swipe_index)`),
+  );
   await db.run(sql.raw(`CREATE INDEX IF NOT EXISTS idx_chat_presets_mode_active ON chat_presets(mode, is_active)`));
 }

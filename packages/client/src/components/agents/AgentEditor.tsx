@@ -45,7 +45,9 @@ import { HelpTooltip } from "../ui/HelpTooltip";
 import {
   BUILT_IN_AGENTS,
   BUILT_IN_TOOLS,
+  DEFAULT_WORLD_GRAPH_SYNC_SETTINGS,
   DEFAULT_AGENT_TOOLS,
+  resolveWorldGraphSyncSettings,
   getDefaultAgentPrompt,
   type AgentPhase,
   type ToolDefinition,
@@ -120,6 +122,9 @@ export function AgentEditor() {
   const [localSourceFileIds, setLocalSourceFileIds] = useState<string[]>([]);
   const [localAutoGenerateAvatars, setLocalAutoGenerateAvatars] = useState(false);
   const [localUseAvatarReferences, setLocalUseAvatarReferences] = useState(false);
+  const [localWorldGraphSyncChunkCharLimit, setLocalWorldGraphSyncChunkCharLimit] = useState(
+    DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit,
+  );
   const [spotifyStatus, setSpotifyStatus] = useState<{
     connected: boolean;
     expired: boolean;
@@ -170,6 +175,8 @@ export function AgentEditor() {
       setLocalSourceFileIds(settings.sourceFileIds ?? []);
       setLocalAutoGenerateAvatars(settings.autoGenerateAvatars ?? false);
       setLocalUseAvatarReferences(settings.useAvatarReferences ?? false);
+      const syncSettings = resolveWorldGraphSyncSettings(settings);
+      setLocalWorldGraphSyncChunkCharLimit(syncSettings.syncChunkCharLimit);
       setLocalPrompt(dbConfig.promptTemplate || "");
     } else if (builtIn) {
       setLocalName(builtIn.name);
@@ -190,6 +197,7 @@ export function AgentEditor() {
       setLocalSourceFileIds([]);
       setLocalAutoGenerateAvatars(false);
       setLocalUseAvatarReferences(false);
+      setLocalWorldGraphSyncChunkCharLimit(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit);
       setLocalPrompt("");
     } else {
       // Brand new custom agent — start empty
@@ -210,6 +218,7 @@ export function AgentEditor() {
       setLocalSourceFileIds([]);
       setLocalAutoGenerateAvatars(false);
       setLocalUseAvatarReferences(false);
+      setLocalWorldGraphSyncChunkCharLimit(DEFAULT_WORLD_GRAPH_SYNC_SETTINGS.syncChunkCharLimit);
       setLocalPrompt("");
     }
     setDirty(false);
@@ -227,6 +236,7 @@ export function AgentEditor() {
 
   // Knowledge Retrieval agent — lorebook source selector
   const isKnowledgeRetrievalAgent = agentDetailId === "knowledge-retrieval" || dbConfig?.type === "knowledge-retrieval";
+  const isWorldGraphAgent = agentDetailId === "world-graph" || dbConfig?.type === "world-graph";
   const { data: allLorebooks } = useLorebooks();
   const { data: allKnowledgeSources } = useKnowledgeSources();
   const uploadSource = useUploadKnowledgeSource();
@@ -285,7 +295,7 @@ export function AgentEditor() {
       connectionId: localConnectionId || null,
       promptTemplate: localPrompt,
       settings: {
-        ...(localContextSize !== "" ? { contextSize: Number(localContextSize) } : {}),
+        ...(!isWorldGraphAgent && localContextSize !== "" ? { contextSize: Number(localContextSize) } : {}),
         ...(localRunInterval !== "" ? { runInterval: Number(localRunInterval) } : {}),
         ...(localInjectAsSection ? { injectAsSection: true } : {}),
         enabledTools: localEnabledTools,
@@ -295,6 +305,7 @@ export function AgentEditor() {
         ...(localImageConnectionId ? { imageConnectionId: localImageConnectionId } : {}),
         ...(localAutoGenerateAvatars ? { autoGenerateAvatars: true } : {}),
         ...(localUseAvatarReferences ? { useAvatarReferences: true } : {}),
+        ...(isWorldGraphAgent ? { syncChunkCharLimit: localWorldGraphSyncChunkCharLimit } : {}),
       },
     };
 
@@ -342,8 +353,10 @@ export function AgentEditor() {
     localSourceFileIds,
     localAutoGenerateAvatars,
     localUseAvatarReferences,
+    localWorldGraphSyncChunkCharLimit,
     dbConfig,
     builtIn,
+    isWorldGraphAgent,
     updateAgent,
     createAgent,
     openAgentDetail,
@@ -652,8 +665,45 @@ export function AgentEditor() {
             </FieldGroup>
           )}
 
+          {/* ── World Graph Sync ── */}
+          {isWorldGraphAgent && (
+            <FieldGroup
+              label="World Graph Sync"
+              icon={<Layers size="0.875rem" className="text-[var(--primary)]" />}
+              help="Lorebook sync now uses recursive containment for movement. Locations inside locations are reachable through the containment tree, and chunk size is the main control over sync cost."
+            >
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[0.6875rem] font-medium text-[var(--foreground)] mb-1.5">
+                    Chunk Char Limit
+                  </label>
+                  <input
+                    type="number"
+                    min={8000}
+                    max={120000}
+                    step={1000}
+                    value={localWorldGraphSyncChunkCharLimit}
+                    onChange={(e) => {
+                      const value = Math.max(8000, Math.min(120000, parseInt(e.target.value) || 8000));
+                      setLocalWorldGraphSyncChunkCharLimit(value);
+                      markDirty();
+                    }}
+                    className="w-full max-w-xs rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm tabular-nums ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                  />
+                  <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                    Larger chunks reduce API calls but pack more lore into each structured sync step.
+                  </p>
+                </div>
+                <p className="text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+                  Containment is recursive. If a school contains classes, each class is reachable through the school
+                  without needing duplicate traversable routes. Explicit routes are reserved for real travel links.
+                </p>
+              </div>
+            </FieldGroup>
+          )}
+
           {/* ── Context Size (hidden for Chat Summary — that uses the popover) ── */}
-          {!isChatSummaryAgent && (
+          {!isChatSummaryAgent && !isWorldGraphAgent && (
             <FieldGroup
               label="Context Size"
               icon={<Clock size="0.875rem" className="text-[var(--primary)]" />}

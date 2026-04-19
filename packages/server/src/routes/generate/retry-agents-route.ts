@@ -265,21 +265,37 @@ async function resolveRetryAgents(args: {
   }
 
   for (const builtIn of builtInFallbackConfigs) {
+    const cfg = await agentsStore.ensureBuiltInConfig(builtIn);
+    if (!cfg) continue;
+    let agentProvider = provider;
+    let agentModel = conn.model;
+
+    if (cfg.connectionId) {
+      const agentConn = await conns.getWithKey(cfg.connectionId as string);
+      if (agentConn) {
+        const agentBaseUrl = resolveBaseUrl(agentConn);
+        if (agentBaseUrl) {
+          agentProvider = createLLMProvider(agentConn.provider, agentBaseUrl, agentConn.apiKey);
+          agentModel = agentConn.model;
+        }
+      }
+    }
+
     resolvedAgents.push({
-      cfg: { id: `builtin:${builtIn.id}`, type: builtIn.id, name: builtIn.name } as any,
+      cfg,
       resolved: {
-        id: `builtin:${builtIn.id}`,
-        type: builtIn.id,
-        name: builtIn.name,
-        phase: builtIn.phase,
-        promptTemplate: "",
-        connectionId: null,
-        settings: {},
-        provider,
-        model: conn.model,
+        id: cfg.id,
+        type: cfg.type,
+        name: cfg.name,
+        phase: cfg.phase as string,
+        promptTemplate: cfg.promptTemplate as string,
+        connectionId: cfg.connectionId as string | null,
+        settings: typeof cfg.settings === "string" ? JSON.parse(cfg.settings) : (cfg.settings ?? {}),
+        provider: agentProvider,
+        model: agentModel,
       },
-      agentProvider: provider,
-      agentModel: conn.model,
+      agentProvider,
+      agentModel,
     });
   }
 

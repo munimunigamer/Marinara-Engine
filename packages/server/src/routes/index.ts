@@ -41,6 +41,7 @@ import { chatPresetsRoutes } from "./chat-presets.routes.js";
 import { updatesRoutes } from "./updates.routes.js";
 import { themesRoutes } from "./themes.routes.js";
 import { appSettingsRoutes } from "./app-settings.routes.js";
+import { worldGraphRoutes } from "./world-graph.routes.js";
 import { gameRoutes } from "./game.routes.js";
 import { gameAssetsRoutes } from "./game-assets.routes.js";
 import { sidecarRoutes } from "./sidecar.routes.js";
@@ -88,4 +89,5 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(gameRoutes, { prefix: "/api/game" });
   await app.register(gameAssetsRoutes, { prefix: "/api/game-assets" });
   await app.register(sidecarRoutes, { prefix: "/api/sidecar" });
+  await app.register(worldGraphRoutes, { prefix: "/api/world-graph" });
 }

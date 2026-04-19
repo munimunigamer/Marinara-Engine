@@ -21,6 +21,7 @@ export * from "./types/theme.js";
 export * from "./types/chat-preset.js";
 export * from "./types/game.js";
 export * from "./types/sidecar.js";
+export * from "./types/world-graph.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
@@ -34,6 +35,7 @@ export * from "./schemas/custom-tool.schema.js";
 export * from "./schemas/regex.schema.js";
 export * from "./schemas/theme.schema.js";
 export * from "./schemas/app-settings.schema.js";
+export * from "./schemas/world-graph.schema.js";
 
 // Constants
 export * from "./constants/providers.js";
@@ -41,6 +43,7 @@ export * from "./constants/defaults.js";
 export * from "./constants/chat-modes.js";
 export * from "./constants/model-lists.js"; // also exports IMAGE_GENERATION_SOURCES
 export * from "./constants/agent-prompts.js";
+export * from "./constants/world-graph-sync.js";
 
 // Utils
 export * from "./utils/macro-engine.js";
