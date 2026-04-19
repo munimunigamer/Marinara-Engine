@@ -36,12 +36,16 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Resolve release tag
+        id: resolve_tag
         shell: bash
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
-          echo "RELEASE_VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Check version drift
         run: pnpm version:check
@@ -50,12 +54,12 @@ jobs:
         run: pnpm guard:installer-artifacts
 
       - name: Render release notes
-        run: pnpm release:notes -- "${RELEASE_VERSION}" --output release-notes.md
+        run: pnpm release:notes -- "${{ steps.resolve_tag.outputs.version }}" --output release-notes.md
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_TAG }}
+          tag_name: ${{ steps.resolve_tag.outputs.tag }}
+          name: ${{ steps.resolve_tag.outputs.tag }}
           body_path: release-notes.md
           generate_release_notes: false

@@ -210,6 +210,7 @@ All hooks live in `src/hooks/` and follow the pattern `use-{entity}.ts`.
 The most complex hook. Returns `{ generate, regenerateMessage }`.
 
 `generate(chatId, prompt, signal)` handles:
+
 1. Setting streaming state in `chat.store.ts`
 2. Sending generation request to `/api/generate`
 3. Parsing SSE events: `token`, `agent_update`, `game_state`, `encounter_init`, `scene_created`, `done`, `error`
@@ -248,6 +249,7 @@ The chat system is the largest feature area (30+ files). It has three rendering 
 #### Conversation Mode (`ChatConversationSurface.tsx`)
 
 iMessage-style chat bubbles. User messages on the right, assistant on the left. Features:
+
 - Infinite scroll pagination (load older messages on scroll up)
 - Per-message actions: edit, copy, regenerate, delete, branch, peek prompt
 - Attachment support (images, files)
@@ -259,6 +261,7 @@ iMessage-style chat bubbles. User messages on the right, assistant on the left. 
 #### Roleplay Mode (`ChatRoleplaySurface.tsx`)
 
 Dark, immersive RPG-themed interface. All the conversation features plus:
+
 - **Character sprites** with expression changes driven by the expression agent
 - **Roleplay HUD** showing game state (time, location, weather, present characters)
 - **Weather effects** (particle overlays matching the scene weather)
@@ -319,6 +322,7 @@ Modals are rendered by `ModalRenderer.tsx`, which reads `ui.store.modal` and ren
 Right-side panels display resource lists with search, sort, and filtering. Clicking a resource opens its full editor in the center pane.
 
 Panels are registered in `RightPanel.tsx` in two places:
+
 1. `PANEL_CONFIG` — title, icon, gradient color
 2. `PANELS` — component map
 
@@ -620,6 +624,7 @@ Plain dialogue with one or more AI characters. Characters can have different sta
 ### Roleplay Mode
 
 Immersive narrative experience with game state tracking:
+
 - Scene context (location, time, weather)
 - Character presence and mood
 - Player stats, inventory, and quests
@@ -632,6 +637,7 @@ Immersive narrative experience with game state tracking:
 ### Visual Novel Mode
 
 VN-style experience with:
+
 - Character sprites with positioning (7 positions from far-left to far-right)
 - Scene transitions (fade, dissolve, slide, wipe)
 - Choice-based branching

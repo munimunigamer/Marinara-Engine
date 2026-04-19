@@ -49,6 +49,7 @@ import { mirrorSpritePlacements, normalizeSpritePlacements } from "./sprite-plac
 import type { CharacterMap, MessageSelectionToggle, MessageWithSwipes, PeekPromptData } from "./chat-area.types";
 import { RecentChats } from "./RecentChats";
 import { NewChatConnectionGate } from "./NewChatConnectionGate";
+import { ChatCommonOverlays } from "./ChatCommonOverlays";
 
 export type { CharacterMap };
 
@@ -60,6 +61,11 @@ const ChatConversationSurface = lazy(async () => {
 const ChatRoleplaySurface = lazy(async () => {
   const module = await import("./ChatRoleplaySurface");
   return { default: module.ChatRoleplaySurface };
+});
+
+const GameSurface = lazy(async () => {
+  const module = await import("../game/GameSurface");
+  return { default: module.GameSurface };
 });
 
 export function ChatArea() {
@@ -94,13 +100,16 @@ export function ChatArea() {
 
   const { data: chat } = useChat(activeChatId);
   const { data: allChats } = useChats();
+  // Game mode loads ALL messages (no pagination) so the in-game log
+  // shows the full session history instead of only the latest page.
+  const isGameChat = (chat as unknown as { mode?: string })?.mode === "game";
   const {
     data: msgData,
     isLoading,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useChatMessages(activeChatId, messagesPerPage);
+  } = useChatMessages(activeChatId, isGameChat ? 0 : messagesPerPage);
   const messages = useMemo<MessageWithSwipes[] | undefined>(
     () => (msgData ? [...msgData.pages].reverse().flat() : undefined),
     [msgData],
@@ -116,7 +125,7 @@ export function ChatArea() {
     });
     return map;
   }, [messageOffset, messages]);
-  const messageOrderIndexById = useMemo(() => {
+  const _messageOrderIndexById = useMemo(() => {
     const map = new Map<string, number>();
     if (!messages) return map;
     messages.forEach((message, index) => {
@@ -142,14 +151,14 @@ export function ChatArea() {
   const agentProcessing = useAgentStore((s) => s.isProcessing);
 
   const handleQuickStart = useCallback(
-    (mode: "conversation" | "roleplay") => {
+    (mode: "conversation" | "roleplay" | "game") => {
       const connectionRows = ((connections ?? []) as Array<{ id: string }>).filter((connection) => !!connection.id);
       if (connectionRows.length === 0) {
         useChatStore.getState().setPendingNewChatMode(mode);
         return;
       }
 
-      const label = mode === "conversation" ? "Conversation" : "Roleplay";
+      const label = mode === "conversation" ? "Conversation" : mode === "game" ? "Game" : "Roleplay";
       createChat.mutate(
         { name: `New ${label}`, mode, characterIds: [] },
         {
@@ -217,10 +226,12 @@ export function ChatArea() {
       boxColor?: string;
     }>;
     // Prefer per-chat personaId, fall back to globally active persona
+    // (Game mode skips the fallback — persona must be explicitly selected)
     const chatPersonaId = (chat as unknown as { personaId?: string | null })?.personaId;
+    const isGame = (chat as unknown as { mode?: string })?.mode === "game";
     const persona =
       (chatPersonaId ? personas.find((p) => p.id === chatPersonaId) : null) ??
-      personas.find((p) => p.isActive === "true" || p.isActive === true);
+      (!isGame ? personas.find((p) => p.isActive === "true" || p.isActive === true) : null);
     if (!persona) return undefined;
     return {
       name: persona.name,
@@ -801,22 +812,22 @@ export function ChatArea() {
           data-component="ChatArea.EmptyState"
           className="flex flex-1 flex-col items-center overflow-y-auto p-4 sm:p-8"
         >
-          <div className="flex w-full max-w-md flex-col items-center gap-6 my-auto py-4">
+          <div className="flex w-full max-w-md flex-col items-center gap-4 sm:gap-6 my-auto py-4">
             {/* Central hero */}
             <div className="relative">
-              <div className="animate-pulse-ring bunny-glow flex h-20 w-20 items-center justify-center rounded-2xl shadow-xl shadow-orange-500/20 overflow-hidden">
+              <div className="animate-pulse-ring bunny-glow flex h-14 w-14 sm:h-20 sm:w-20 items-center justify-center rounded-2xl shadow-xl shadow-orange-500/20 overflow-hidden">
                 <img src="/logo-splash.gif" alt="Marinara Engine" className="h-full w-full object-cover" />
               </div>
             </div>
 
             <div className="text-center">
-              <h3 className="retro-glow-text text-xl font-bold tracking-tight">✧ Marinara Engine ✧</h3>
-              <p className="mt-2 max-w-xs text-sm text-[var(--muted-foreground)]">
+              <h3 className="retro-glow-text text-base sm:text-xl font-bold tracking-tight">✧ Marinara Engine ✧</h3>
+              <p className="mt-1.5 sm:mt-2 max-w-xs text-xs sm:text-sm text-[var(--muted-foreground)]">
                 To get started, choose the type of chat you'd like to have with the AI
               </p>
             </div>
 
-            <div className="stagger-children flex flex-wrap justify-center gap-3">
+            <div className="stagger-children flex flex-wrap justify-center gap-2 sm:gap-3">
               <QuickStartCard
                 icon={<MessageSquare size="1.125rem" />}
                 label="Conversation"
@@ -838,8 +849,8 @@ export function ChatArea() {
                 label="Game"
                 bg="linear-gradient(135deg, #e15c8c, #c94776)"
                 shadowColor="rgba(225,92,140,0.15)"
-                tooltip="Coming soon"
-                comingSoon
+                tooltip="AI-managed singleplayer RPG with a Game Master, party, dice, maps, and quests"
+                onClick={() => handleQuickStart("game")}
               />
             </div>
 
@@ -910,9 +921,9 @@ export function ChatArea() {
 
               {/* Special thanks */}
               <p className="mt-1 max-w-xs text-center text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]/40">
-                Special thanks to LukaTheHero, Coxde, JorgeLTE, Seele The Seal King, Loungemeister, Kale, Tabris, GREGOR
-                OVECH, Coins, Tacoman, Jorge, Promansis, Kitsumiro, Sheep, Pod042, Prolix, PlutoMayhem, Mezzeh, Kuc0,
-                Exalted, Yang Best Girl, MidnightSleeper, Geechan, TheLonelyDevil, Artus, and you!
+                Special thanks to Joshellis625, LukaTheHero, Coxde, JorgeLTE, Seele The Seal King, Loungemeister, Kale,
+                Tabris, GREGOR OVECH, Coins, Tacoman, Jorge, Promansis, Kitsumiro, Sheep, Pod042, Prolix, PlutoMayhem,
+                Mezzeh, Kuc0, Exalted, Yang Best Girl, MidnightSleeper, Geechan, TheLonelyDevil, Artus, and you!
               </p>
 
               {/* Restart tutorial */}
@@ -976,6 +987,87 @@ export function ChatArea() {
           }
         : undefined;
   const surfaceFallback = <div className="flex flex-1 overflow-hidden" />;
+
+  // ═══════════════════════════════════════════════
+  // Game mode — RPG surface with GM narration, map, party chat
+  // ═══════════════════════════════════════════════
+  if (chatMode === "game") {
+    const gameCharacters = allCharacters
+      ? (allCharacters as Array<{ id: string; data: string; avatarPath: string | null }>).map((c) => {
+          try {
+            const parsed = typeof c.data === "string" ? JSON.parse(c.data) : c.data;
+            return {
+              id: c.id,
+              name: parsed.name ?? "Unknown",
+              avatarUrl: c.avatarPath ?? undefined,
+              description: parsed.description ?? "",
+              personality: parsed.personality ?? "",
+              backstory: parsed.extensions?.backstory ?? "",
+              appearance: parsed.extensions?.appearance ?? "",
+              tags: parsed.tags ?? [],
+            };
+          } catch {
+            return { id: c.id, name: "Unknown" };
+          }
+        })
+      : [];
+
+    return (
+      <Suspense fallback={surfaceFallback}>
+        <>
+          <GameSurface
+            activeChatId={activeChatId}
+            chat={chat!}
+            chatMeta={chatMeta}
+            messages={messages ?? []}
+            isStreaming={isStreaming}
+            isMessagesLoading={isLoading}
+            characterMap={characterMap}
+            characters={gameCharacters}
+            personaInfo={personaInfo}
+            chatBackground={chatBackground}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+
+          <ChatCommonOverlays
+            chat={chat}
+            activeChatId={activeChatId}
+            settingsOpen={settingsOpen}
+            filesOpen={filesOpen}
+            galleryOpen={galleryOpen}
+            wizardOpen={wizardOpen}
+            peekPromptData={peekPromptData}
+            deleteDialogMessageId={deleteDialogMessageId}
+            multiSelectMode={multiSelectMode}
+            selectedMessageCount={selectedMessageIds.size}
+            sceneSettings={{
+              spriteArrangeMode,
+              onToggleSpriteArrange: () => setSpriteArrangeMode((prev) => !prev),
+              onResetSpritePlacements: handleResetSpritePlacements,
+              onSpriteSideChange: handleSetSpritePosition,
+            }}
+            onCloseSettings={() => setSettingsOpen(false)}
+            onCloseFiles={() => setFilesOpen(false)}
+            onCloseGallery={() => setGalleryOpen(false)}
+            onIllustrate={() => retryAgents(activeChatId, ["illustrator"])}
+            onWizardFinish={() => {
+              setWizardOpen(false);
+              setSettingsOpen(true);
+            }}
+            onClosePeekPrompt={() => setPeekPromptData(null)}
+            onDeleteConfirm={handleDeleteConfirm}
+            onDeleteMore={handleDeleteMore}
+            onCloseDeleteDialog={() => setDeleteDialogMessageId(null)}
+            onBulkDelete={handleBulkDelete}
+            onCancelMultiSelect={handleCancelMultiSelect}
+            onUnselectAllMessages={handleUnselectAllMessages}
+            onSelectAllAboveSelection={handleSelectAllAboveSelection}
+            onSelectAllBelowSelection={handleSelectAllBelowSelection}
+          />
+        </>
+      </Suspense>
+    );
+  }
 
   // ═══════════════════════════════════════════════
   // Conversation mode — Discord-style layout
@@ -1128,6 +1220,7 @@ export function ChatArea() {
           onCloseSettings={() => setSettingsOpen(false)}
           onCloseFiles={() => setFilesOpen(false)}
           onCloseGallery={() => setGalleryOpen(false)}
+          onIllustrate={() => retryAgents(activeChatId, ["illustrator"])}
           onWizardFinish={() => {
             setWizardOpen(false);
             setSettingsOpen(true);
@@ -1207,7 +1300,7 @@ function QuickStartCard({
       onClick={handleClick}
       title={tooltip}
       className={cn(
-        "group card-3d-tilt btn-scanlines relative flex w-24 sm:w-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-[var(--border)] bg-[var(--card)] p-3 sm:p-4 text-center transition-all",
+        "group card-3d-tilt btn-scanlines relative flex w-20 sm:w-28 flex-col items-center justify-center gap-1.5 sm:gap-2 rounded-xl border-2 border-[var(--border)] bg-[var(--card)] p-2.5 sm:p-4 text-center transition-all",
         "cursor-pointer hover:-translate-y-1 hover:border-[var(--primary)]/40 hover:shadow-lg",
       )}
       style={shadowColor ? { ["--tw-shadow-color" as string]: shadowColor } : undefined}
@@ -1218,12 +1311,12 @@ function QuickStartCard({
         </span>
       )}
       <div
-        className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-sm transition-transform group-hover:scale-110"
+        className="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-xl text-white shadow-sm transition-transform group-hover:scale-110"
         style={{ background: bg }}
       >
         {icon}
       </div>
-      <span className="text-xs font-medium text-[var(--muted-foreground)]">{label}</span>
+      <span className="text-[0.625rem] sm:text-xs font-medium text-[var(--muted-foreground)]">{label}</span>
     </div>
   );
 }

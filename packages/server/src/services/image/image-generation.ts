@@ -97,8 +97,8 @@ export function saveImageToDisk(chatId: string, base64: string, ext: string): st
 
 // ── Provider Implementations ──
 
-/** 2-minute timeout for image generation API calls */
-const IMAGE_GEN_TIMEOUT = 120_000;
+/** Default 5-minute timeout for image generation API calls (overridable via env). */
+const IMAGE_GEN_TIMEOUT = Number(process.env.IMAGE_GEN_TIMEOUT_MS ?? 300_000);
 
 async function generateOpenAI(baseUrl: string, apiKey: string, request: ImageGenRequest): Promise<ImageGenResult> {
   const url = `${baseUrl.replace(/\/+$/, "")}/images/generations`;

@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────
 import { z } from "zod";
 
-export const lorebookCategorySchema = z.enum(["world", "character", "npc", "uncategorized"]);
+export const lorebookCategorySchema = z.enum(["world", "character", "npc", "spellbook", "uncategorized"]);
 
 export const selectiveLogicSchema = z.enum(["and", "or", "not"]);
 
@@ -31,7 +31,7 @@ export const createLorebookSchema = z.object({
   chatId: z.string().nullable().default(null),
   enabled: z.boolean().default(true),
   tags: z.array(z.string()).default([]),
-  generatedBy: z.enum(["user", "agent", "import"]).nullable().default(null),
+  generatedBy: z.enum(["user", "agent", "import", "lorebook-maker"]).nullable().default(null),
   sourceAgentId: z.string().nullable().default(null),
 });
 
@@ -47,7 +47,7 @@ export const updateLorebookSchema = z.object({
   chatId: z.string().nullable().optional(),
   enabled: z.boolean().optional(),
   tags: z.array(z.string()).optional(),
-  generatedBy: z.enum(["user", "agent", "import"]).nullable().optional(),
+  generatedBy: z.enum(["user", "agent", "import", "lorebook-maker"]).nullable().optional(),
   sourceAgentId: z.string().nullable().optional(),
 });
 

@@ -125,13 +125,10 @@ export function AppShell() {
     const width = el.clientWidth;
 
     if (compact) {
-      // Currently compact — switch back only if width grew past the
-      // threshold where we entered compact + a comfort buffer.
       if (width > compactWidthRef.current + 80) {
         setCenterCompact(false);
       }
     } else {
-      // Currently wide — walk immediate children looking for overflow.
       let overflows = false;
       const scan = (node: Element, depth: number) => {
         if (overflows || depth > 3) return;
@@ -140,7 +137,7 @@ export function AppShell() {
           return;
         }
         for (let i = 0; i < node.children.length; i++) {
-          scan(node.children[i], depth + 1);
+          scan(node.children[i]!, depth + 1);
         }
       };
       scan(el, 0);
@@ -151,13 +148,24 @@ export function AppShell() {
     }
   }, [setCenterCompact]);
 
+  // Debounce the overflow check so ResizeObserver doesn't cause layout thrashing
+  const overflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedCheckOverflow = useCallback(() => {
+    if (overflowTimerRef.current) clearTimeout(overflowTimerRef.current);
+    overflowTimerRef.current = setTimeout(checkOverflow, 100);
+  }, [checkOverflow]);
+
   useEffect(() => {
     const el = mainRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(checkOverflow);
+    const ro = new ResizeObserver(debouncedCheckOverflow);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [checkOverflow]);
+    return () => {
+      ro.disconnect();
+      if (overflowTimerRef.current) clearTimeout(overflowTimerRef.current);
+    };
+  }, [debouncedCheckOverflow]);
+
   const characterDetailId = useUIStore((s) => s.characterDetailId);
   const lorebookDetailId = useUIStore((s) => s.lorebookDetailId);
   const presetDetailId = useUIStore((s) => s.presetDetailId);

@@ -425,22 +425,24 @@ export function PersonasPanel() {
           onClick={handleCreate}
           disabled={createPersona.isPending}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-500 px-3 py-2 text-xs font-medium text-white shadow-md shadow-emerald-400/15 transition-all hover:shadow-lg hover:shadow-emerald-400/25 active:scale-[0.98] disabled:opacity-50"
+          title="New"
         >
           {createPersona.isPending ? <Loader2 size="0.75rem" className="animate-spin" /> : <Plus size="0.75rem" />}
-          New
+          <span className="md:hidden">New</span>
         </button>
         <button
           onClick={() => openModal("import-persona")}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--secondary)] px-3 py-2 text-xs font-medium text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-[0.98]"
+          title="Import"
         >
-          <Download size="0.75rem" /> Import
+          <Download size="0.75rem" /> <span className="md:hidden">Import</span>
         </button>
         <button
           onClick={() => openModal("persona-maker")}
-          className="flex w-9 items-center justify-center rounded-xl bg-gradient-to-r from-violet-400 to-fuchsia-500 py-2 text-xs font-medium text-white shadow-md shadow-violet-500/15 transition-all hover:shadow-lg hover:shadow-violet-500/25 active:scale-[0.98]"
-          title="AI Persona Maker"
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--secondary)] px-3 py-2 text-xs font-medium text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-[0.98]"
+          title="AI Maker"
         >
-          <Sparkles size="0.75rem" />
+          <Sparkles size="0.75rem" /> <span className="md:hidden">Maker</span>
         </button>
         <button
           onClick={() => {
@@ -451,14 +453,15 @@ export function PersonasPanel() {
             }
           }}
           className={cn(
-            "flex items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium transition-all",
+            "flex flex-1 items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium transition-all",
             selectionMode
               ? "bg-emerald-400/15 text-emerald-400 ring-1 ring-emerald-400/30"
               : "bg-[var(--secondary)] text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
           )}
+          title="Select"
         >
           <Download size="0.75rem" />
-          Select
+          <span className="md:hidden">Select</span>
         </button>
       </div>
 
@@ -805,54 +808,54 @@ export function PersonasPanel() {
               {/* Actions */}
               {!selectionMode && (
                 <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 max-md:opacity-100">
-                {!active && (
+                  {!active && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        activatePersona.mutate(persona.id);
+                      }}
+                      className="rounded-lg p-1.5 text-emerald-400 transition-colors hover:bg-emerald-400/10"
+                      title="Set as active"
+                    >
+                      <Star size="0.8125rem" />
+                    </button>
+                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      activatePersona.mutate(persona.id);
+                      openPersonaDetail(persona.id);
                     }}
-                    className="rounded-lg p-1.5 text-emerald-400 transition-colors hover:bg-emerald-400/10"
-                    title="Set as active"
+                    className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    title="Edit"
                   >
-                    <Star size="0.8125rem" />
+                    <Pencil size="0.8125rem" />
                   </button>
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openPersonaDetail(persona.id);
-                  }}
-                  className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                  title="Edit"
-                >
-                  <Pencil size="0.8125rem" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    duplicatePersona.mutate(persona.id, {
-                      onSuccess: () => {
-                        toast.success(`Duplicated "${persona.name}"`);
-                      },
-                    });
-                  }}
-                  className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-sky-400/10 hover:text-sky-400"
-                  title="Duplicate"
-                >
-                  <Copy size="0.8125rem" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!confirm(`Delete "${persona.name}"? This cannot be undone.`)) return;
-                    deletePersona.mutate(persona.id);
-                  }}
-                  className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
-                  title="Delete"
-                >
-                  <Trash2 size="0.8125rem" />
-                </button>
-              </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      duplicatePersona.mutate(persona.id, {
+                        onSuccess: () => {
+                          toast.success(`Duplicated "${persona.name}"`);
+                        },
+                      });
+                    }}
+                    className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-sky-400/10 hover:text-sky-400"
+                    title="Duplicate"
+                  >
+                    <Copy size="0.8125rem" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!confirm(`Delete "${persona.name}"? This cannot be undone.`)) return;
+                      deletePersona.mutate(persona.id);
+                    }}
+                    className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]"
+                    title="Delete"
+                  >
+                    <Trash2 size="0.8125rem" />
+                  </button>
+                </div>
               )}
             </div>
           );

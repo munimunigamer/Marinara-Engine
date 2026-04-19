@@ -294,7 +294,9 @@ export function AgentsPanel() {
               <PanelSection key={category} title={title} icon={icon}>
                 <div className="mb-1.5 text-[0.625rem] text-[var(--muted-foreground)]">{desc}</div>
                 {!agents.length ? (
-                  <p className="px-1 py-2 text-[0.625rem] text-[var(--muted-foreground)]">No agents in this category.</p>
+                  <p className="px-1 py-2 text-[0.625rem] text-[var(--muted-foreground)]">
+                    No agents in this category.
+                  </p>
                 ) : (
                   agents.map((agent) =>
                     renderAgentCard({
@@ -480,7 +482,13 @@ function renderAgentCard({
   openAgentDetail: (id: string) => void;
 }) {
   return (
-    <div key={id} className={cn("flex items-start gap-2.5 rounded-lg p-2 transition-colors hover:bg-[var(--sidebar-accent)]", !enabled && "opacity-55")}>
+    <div
+      key={id}
+      className={cn(
+        "flex items-start gap-2.5 rounded-lg p-2 transition-colors hover:bg-[var(--sidebar-accent)]",
+        !enabled && "opacity-55",
+      )}
+    >
       <Sparkles size="0.875rem" className="mt-0.5 shrink-0 text-[var(--primary)]" />
       <button className="min-w-0 flex-1 text-left" onClick={() => openAgentDetail(custom ? id : type)}>
         <div className="flex items-center gap-1.5">

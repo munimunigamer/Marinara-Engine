@@ -76,14 +76,44 @@ export class AnthropicProvider extends BaseLLMProvider {
       ...(options.topK ? { top_k: options.topK } : {}),
     };
 
+    // Opus 4.7+: sampling parameters are forbidden (400 error).
+    // Strip temperature, top_k regardless of thinking mode.
+    const modelLower = options.model.toLowerCase();
+    const isAdaptiveOnly = /claude-opus-4-(?:[7-9]|\d{2,})/.test(modelLower);
+    if (isAdaptiveOnly) {
+      delete body.temperature;
+      delete body.top_k;
+    }
+
     // Enable extended thinking for reasoning models
     if (options.enableThinking) {
-      const budgetTokens = Math.max(1024, Math.min(options.maxTokens ?? 4096, 16000));
-      body.thinking = { type: "enabled", budget_tokens: budgetTokens };
-      // Anthropic requires max_tokens to be > budget_tokens
-      body.max_tokens = (options.maxTokens ?? 4096) + budgetTokens;
-      // Cannot use temperature with extended thinking
-      delete body.temperature;
+      if (isAdaptiveOnly) {
+        // Opus 4.7+: adaptive thinking (budget_tokens removed).
+        // display defaults to "omitted" on 4.7 — set "summarized" when
+        // the caller wants to surface thinking content to the user.
+        const thinking: Record<string, unknown> = { type: "adaptive" };
+        if (options.onThinking) {
+          thinking.display = "summarized";
+        }
+        body.thinking = thinking;
+        body.output_config = { effort: options.reasoningEffort ?? "high" };
+      } else {
+        // Opus 4.6 / Sonnet 4.6: prefer adaptive thinking (budget_tokens deprecated).
+        const supportsAdaptive = /claude-(opus|sonnet)-4-[56]/.test(modelLower);
+        if (supportsAdaptive) {
+          body.thinking = { type: "adaptive" };
+          body.output_config = { effort: options.reasoningEffort ?? "high" };
+          // Cannot use temperature with extended thinking
+          delete body.temperature;
+        } else {
+          const budgetTokens = Math.max(1024, Math.min(options.maxTokens ?? 4096, 16000));
+          body.thinking = { type: "enabled", budget_tokens: budgetTokens };
+          // Anthropic requires max_tokens to be > budget_tokens
+          body.max_tokens = (options.maxTokens ?? 4096) + budgetTokens;
+          // Cannot use temperature with extended thinking
+          delete body.temperature;
+        }
+      }
     }
 
     const response = await llmFetch(url, {

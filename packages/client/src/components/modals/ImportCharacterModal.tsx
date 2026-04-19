@@ -89,7 +89,9 @@ export function ImportCharacterModal({ open, onClose }: Props) {
           nextResults.push({
             filename: result.filename,
             success: result.success,
-            message: result.success ? `Imported "${result.name ?? result.filename}"` : (result.error ?? "Import failed"),
+            message: result.success
+              ? `Imported "${result.name ?? result.filename}"`
+              : (result.error ?? "Import failed"),
           });
         }
       }
@@ -111,9 +113,7 @@ export function ImportCharacterModal({ open, onClose }: Props) {
           nextResults.push({
             filename: item.file.name,
             success: result.success,
-            message: result.success
-              ? `Imported "${result.name ?? item.file.name}"`
-              : (result.error ?? "Import failed"),
+            message: result.success ? `Imported "${result.name ?? item.file.name}"` : (result.error ?? "Import failed"),
           });
         } catch (error) {
           nextResults.push({

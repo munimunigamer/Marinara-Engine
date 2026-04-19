@@ -327,7 +327,8 @@ export async function updatesRoutes(app: FastifyInstance) {
             timeout: 60_000,
           });
         } catch (mergeErr) {
-          if (stashed) await execFileAsync("git", ["stash", "pop", "-q"], { cwd: root, timeout: 10_000 }).catch(() => {});
+          if (stashed)
+            await execFileAsync("git", ["stash", "pop", "-q"], { cwd: root, timeout: 10_000 }).catch(() => {});
           const branchLabel = currentBranch ? ` branch "${currentBranch}"` : " current checkout";
           const message = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
           throw new Error(`Could not fast-forward the${branchLabel} to ${UPDATE_REF}: ${message}`);

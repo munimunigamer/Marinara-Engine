@@ -30,7 +30,7 @@ function upsertPersistedMessages(qc: QueryClient, chatId: string, incoming: Mess
   const sortedIncoming = sortMessagesByCreatedAt(incoming);
 
   qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) => {
-    if (!old) {
+    if (!old?.pages) {
       return {
         pageParams: [undefined],
         pages: [sortedIncoming],
@@ -67,7 +67,7 @@ function appendMissingPersistedMessages(qc: QueryClient, chatId: string, incomin
   const sortedIncoming = sortMessagesByCreatedAt(incoming);
 
   qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) => {
-    if (!old) {
+    if (!old?.pages) {
       return {
         pageParams: [undefined],
         pages: [sortedIncoming],
@@ -257,7 +257,7 @@ export function useGenerate() {
           createdAt: new Date().toISOString(),
         };
         qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(params.chatId), (old) => {
-          if (!old) return old;
+          if (!old?.pages) return old;
           const pages = [...old.pages];
           // First page holds newest messages — append to it
           pages[0] = [...(pages[0] ?? []), optimisticMsg];
@@ -1039,6 +1039,7 @@ export function useGenerate() {
               flushTypewriterBuffer();
               if (isActiveChat()) setProcessing(false);
               showError((event.data as string) || "Generation failed");
+              window.dispatchEvent(new CustomEvent("marinara:generation-error", { detail: { chatId: params.chatId } }));
               break;
             }
 
@@ -1074,6 +1075,7 @@ export function useGenerate() {
         if (error instanceof DOMException && error.name === "AbortError") return receivedContent;
         const msg = error instanceof Error ? error.message : "Generation failed";
         showError(msg);
+        window.dispatchEvent(new CustomEvent("marinara:generation-error", { detail: { chatId: params.chatId } }));
       } finally {
         // Cancel any pending animation frame to prevent leaks
         cancelAnimationFrame(rafId);
@@ -1186,6 +1188,12 @@ export function useGenerate() {
           // Not the owner but still need messages up to date
           await refreshMessagesAuthoritatively(qc, params.chatId, persistedMessages.values());
         }
+
+        // Always notify game surface that generation completed for this chat.
+        // Dispatched unconditionally — GameSurface uses lastProcessedMsgRef
+        // to prevent duplicate processing.
+        console.warn("[use-generate] dispatching generation-complete for chat:", params.chatId);
+        window.dispatchEvent(new CustomEvent("marinara:generation-complete", { detail: { chatId: params.chatId } }));
 
         // Auto-translate newly generated assistant messages if enabled
         if (receivedContent) {
@@ -1418,6 +1426,16 @@ export function useGenerate() {
               }
               break;
             }
+            case "illustration": {
+              const illData = event.data as { messageId: string; imageUrl: string; reason?: string };
+              toast(illData.reason ? `🎨 ${illData.reason}` : "🎨 Scene illustration generated");
+              // Refresh messages so the illustration attachment appears
+              if (isActiveChat()) {
+                qc.invalidateQueries({ queryKey: ["messages", chatId] });
+                qc.invalidateQueries({ queryKey: ["gallery", chatId] });
+              }
+              break;
+            }
             case "error": {
               hasError = true;
               showError((event.data as string) || "Agent retry failed");
@@ -1460,6 +1478,7 @@ export function useGenerate() {
       setFailedAgentTypes,
       setProcessing,
       setGameState,
+      qc,
     ],
   );
 

@@ -60,23 +60,39 @@ const TABS = [
 ] as const;
 
 const SETTINGS_COMPONENTS: Record<(typeof TABS)[number]["id"], React.FC> = {
-  general: GeneralSettings,
-  appearance: AppearanceSettings,
-  themes: ThemesSettings,
-  extensions: ExtensionsSettings,
-  import: ImportSettings,
-  advanced: AdvancedSettings,
+  general: React.memo(GeneralSettings),
+  appearance: React.memo(AppearanceSettings),
+  themes: React.memo(ThemesSettings),
+  extensions: React.memo(ExtensionsSettings),
+  import: React.memo(ImportSettings),
+  advanced: React.memo(AdvancedSettings),
 };
 
 const EXPUNGE_SCOPE_OPTIONS: Array<{ id: ExpungeScope; label: string; description: string }> = [
-  { id: "chats", label: "Chats & Messages", description: "Chats, folders, messages, scene/OOC data, and chat runtime state." },
-  { id: "characters", label: "Characters", description: "Characters and character groups. Professor Mari is always preserved." },
+  {
+    id: "chats",
+    label: "Chats & Messages",
+    description: "Chats, folders, messages, scene/OOC data, and chat runtime state.",
+  },
+  {
+    id: "characters",
+    label: "Characters",
+    description: "Characters and character groups. Professor Mari is always preserved.",
+  },
   { id: "personas", label: "Personas", description: "Personas and persona groups." },
   { id: "lorebooks", label: "Lorebooks", description: "Lorebooks and lorebook entries." },
   { id: "presets", label: "Presets", description: "Prompt presets, groups, sections, and variables." },
   { id: "connections", label: "Connections", description: "API connections and model endpoints." },
-  { id: "automation", label: "Automation & Themes", description: "Agents, tools, regex scripts, synced themes, and automation state." },
-  { id: "media", label: "Media & Assets", description: "Backgrounds, avatars, sprites, gallery items, fonts, and knowledge-source files." },
+  {
+    id: "automation",
+    label: "Automation & Themes",
+    description: "Agents, tools, regex scripts, synced themes, and automation state.",
+  },
+  {
+    id: "media",
+    label: "Media & Assets",
+    description: "Backgrounds, avatars, sprites, gallery items, fonts, and knowledge-source files.",
+  },
 ];
 
 // Module-level set survives component remounts (e.g. mobile AnimatePresence unmount/remount)
@@ -134,10 +150,16 @@ function GeneralSettings() {
   const setEnableStreaming = useUIStore((s) => s.setEnableStreaming);
   const streamingSpeed = useUIStore((s) => s.streamingSpeed);
   const setStreamingSpeed = useUIStore((s) => s.setStreamingSpeed);
+  const gameTextSpeed = useUIStore((s) => s.gameTextSpeed);
+  const setGameTextSpeed = useUIStore((s) => s.setGameTextSpeed);
+  const gameAutoPlayDelay = useUIStore((s) => s.gameAutoPlayDelay);
+  const setGameAutoPlayDelay = useUIStore((s) => s.setGameAutoPlayDelay);
   const enterToSendRP = useUIStore((s) => s.enterToSendRP);
   const setEnterToSendRP = useUIStore((s) => s.setEnterToSendRP);
   const enterToSendConvo = useUIStore((s) => s.enterToSendConvo);
   const setEnterToSendConvo = useUIStore((s) => s.setEnterToSendConvo);
+  const enterToSendGame = useUIStore((s) => s.enterToSendGame);
+  const setEnterToSendGame = useUIStore((s) => s.setEnterToSendGame);
   const confirmBeforeDelete = useUIStore((s) => s.confirmBeforeDelete);
   const setConfirmBeforeDelete = useUIStore((s) => s.setConfirmBeforeDelete);
   const messagesPerPage = useUIStore((s) => s.messagesPerPage);
@@ -183,8 +205,54 @@ function GeneralSettings() {
         </div>
       </label>
 
+      {/* Game Narration Text Speed */}
+      <label className="flex flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50">
+        <div className="flex items-center gap-2">
+          <span className="text-xs">Game narration speed</span>
+          <span className="text-xs tabular-nums text-[var(--muted-foreground)]">{gameTextSpeed}</span>
+          <HelpTooltip text="How fast the typewriter effect displays narration text in Game mode. Lower values give a slower cinematic reveal. Higher values show text almost instantly." />
+        </div>
+        <input
+          type="range"
+          min={1}
+          max={100}
+          step={1}
+          value={gameTextSpeed}
+          onChange={(e) => setGameTextSpeed(Number(e.target.value))}
+          className="w-full accent-[var(--primary)]"
+        />
+        <div className="flex justify-between text-[0.625rem] text-[var(--muted-foreground)]">
+          <span>Slow</span>
+          <span>Fast</span>
+        </div>
+      </label>
+
+      {/* Game Auto-Play Delay */}
+      <label className="flex flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50">
+        <div className="flex items-center gap-2">
+          <span className="text-xs">Game auto-play segment delay</span>
+          <span className="text-xs tabular-nums text-[var(--muted-foreground)]">
+            {(gameAutoPlayDelay / 1000).toFixed(1)}s
+          </span>
+          <HelpTooltip text="Pause between each narration segment when auto-play is enabled in Game mode. Enable auto-play via the ▶ button next to Next." />
+        </div>
+        <input
+          type="range"
+          min={200}
+          max={5000}
+          step={100}
+          value={gameAutoPlayDelay}
+          onChange={(e) => setGameAutoPlayDelay(Number(e.target.value))}
+          className="w-full accent-[var(--primary)]"
+        />
+        <div className="flex justify-between text-[0.625rem] text-[var(--muted-foreground)]">
+          <span>Short</span>
+          <span>Long</span>
+        </div>
+      </label>
+
       {/* Send on Enter — inline toggles per mode */}
-      <div className="flex items-center justify-between rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50">
+      <div className="flex flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50">
         <div className="flex items-center gap-2">
           <span className="text-xs">Send on Enter</span>
           <HelpTooltip text="Choose which chat modes send on Enter. When off, Enter creates a new line and you press Ctrl/Cmd+Enter to send." />
@@ -211,6 +279,17 @@ function GeneralSettings() {
             )}
           >
             Conversations
+          </button>
+          <button
+            onClick={() => setEnterToSendGame(!enterToSendGame)}
+            className={cn(
+              "rounded-md px-2 py-1 text-[0.625rem] font-medium transition-all",
+              enterToSendGame
+                ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/30"
+                : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
+            )}
+          >
+            Game
           </button>
         </div>
       </div>
@@ -243,6 +322,30 @@ function GeneralSettings() {
           'When on, text inside quotation marks ("like this") is bolded and colored in chat messages. Turn off for plain text rendering.'
         }
       />
+
+      {/* Game Assets Folders */}
+      <div className="rounded-xl bg-[var(--secondary)]/50 p-4 ring-1 ring-[var(--border)]">
+        <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">Game Asset Folders</div>
+        <div className="flex flex-wrap gap-2">
+          {(["music", "ambient", "sfx", "sprites", "backgrounds"] as const).map((folder) => (
+            <button
+              key={folder}
+              onClick={() => api.post("/game-assets/open-folder", { subfolder: folder }).catch(() => {})}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.6875rem] font-medium capitalize text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+            >
+              <FolderOpen size="0.75rem" />
+              {folder}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2.5 text-[0.625rem] leading-relaxed text-[var(--muted-foreground)]">
+          Drop <code className="rounded bg-[var(--secondary)] px-1 py-0.5 text-[var(--foreground)]/70">.mp3</code>,{" "}
+          <code className="rounded bg-[var(--secondary)] px-1 py-0.5 text-[var(--foreground)]/70">.ogg</code>, or{" "}
+          <code className="rounded bg-[var(--secondary)] px-1 py-0.5 text-[var(--foreground)]/70">.wav</code> files into
+          the subfolder that matches the vibe (e.g. combat music → <strong>music/combat</strong>, forest ambience →{" "}
+          <strong>ambient/nature</strong>). Restart or rescan assets for changes to take effect.
+        </p>
+      </div>
     </div>
   );
 }
@@ -1731,14 +1834,81 @@ function AdvancedSettings() {
   };
 
   const qc = useQueryClient();
-  const backupMutation = useMutation({
-    mutationFn: () => api.post<{ success: boolean; backupName: string; path: string }>("/backup"),
-    onSuccess: (data) => {
-      toast.success(`Backup created: ${data.backupName}`);
+  const [creatingBackup, setCreatingBackup] = useState(false);
+
+  /**
+   * Download a full backup to a user-chosen location.
+   *
+   * Uses the File System Access API (`showSaveFilePicker`) when available so
+   * the browser opens a native "Save As" dialog — this is important on Android
+   * and iOS, where the server-side `data/backups/` folder isn't reachable
+   * without root. Falls back to an anchor-triggered download (which routes
+   * through the browser's default Downloads handling).
+   */
+  const handleCreateBackup = async () => {
+    setCreatingBackup(true);
+    try {
+      const res = await fetch("/api/backup/download", { method: "POST" });
+      if (!res.ok) throw new Error("Backup failed");
+
+      // Pull the filename from Content-Disposition if provided
+      const disposition = res.headers.get("content-disposition") ?? "";
+      const filenameMatch = disposition.match(/filename="?([^"]+)"?/i);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+      const suggestedName = filenameMatch?.[1] ?? `marinara-backup-${timestamp}.zip`;
+
+      const blob = await res.blob();
+
+      // Preferred path: native "Save As" dialog (Chromium desktop, some Android)
+      const w = window as typeof window & {
+        showSaveFilePicker?: (options: {
+          suggestedName?: string;
+          types?: Array<{ description?: string; accept: Record<string, string[]> }>;
+        }) => Promise<{
+          createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }>;
+        }>;
+      };
+      if (typeof w.showSaveFilePicker === "function") {
+        try {
+          const handle = await w.showSaveFilePicker({
+            suggestedName,
+            types: [
+              {
+                description: "Marinara backup archive",
+                accept: { "application/zip": [".zip"] },
+              },
+            ],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          toast.success("Backup saved!");
+          qc.invalidateQueries({ queryKey: ["backups"] });
+          return;
+        } catch (err) {
+          // User cancelled the native picker — treat as a silent no-op
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          // Any other failure falls through to the anchor fallback
+        }
+      }
+
+      // Fallback: anchor download. On Android Chrome this routes through the
+      // system Downloads handler (which typically prompts the user or drops
+      // the file in the Downloads folder, both of which are user-accessible).
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = suggestedName;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Backup downloaded!");
       qc.invalidateQueries({ queryKey: ["backups"] });
-    },
-    onError: () => toast.error("Failed to create backup"),
-  });
+    } catch {
+      toast.error("Failed to create backup");
+    } finally {
+      setCreatingBackup(false);
+    }
+  };
 
   const { data: backups } = useQuery<{ name: string; createdAt: string; path: string }[]>({
     queryKey: ["backups"],
@@ -1988,14 +2158,14 @@ function AdvancedSettings() {
         <div className="flex items-center gap-1.5">
           <Download size="0.75rem" className="text-[var(--muted-foreground)]" />
           <span className="text-xs font-medium">Backup & Export</span>
-          <HelpTooltip text="Create a full backup of your data including all chats, characters, presets, lorebooks, backgrounds, sprites, and more. Backups are saved to the data/backups/ folder." />
+          <HelpTooltip text="Download a full backup as a .zip archive (database + avatars, sprites, backgrounds, gallery, fonts, knowledge sources). Your browser will ask where to save it. Useful on mobile where the server's data folder isn't directly accessible." />
         </div>
         <button
-          onClick={() => backupMutation.mutate()}
-          disabled={backupMutation.isPending}
+          onClick={handleCreateBackup}
+          disabled={creatingBackup}
           className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
         >
-          {backupMutation.isPending ? (
+          {creatingBackup ? (
             <>
               <Loader2 size="0.8125rem" className="animate-spin" />
               Creating backup…
@@ -2003,7 +2173,7 @@ function AdvancedSettings() {
           ) : (
             <>
               <Download size="0.8125rem" />
-              Create Backup
+              Download Backup
             </>
           )}
         </button>
@@ -2091,11 +2261,7 @@ function AdvancedSettings() {
         </div>
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() =>
-              setSelectedScopes(
-                isAllScopesSelected ? [] : EXPUNGE_SCOPE_OPTIONS.map((scope) => scope.id),
-              )
-            }
+            onClick={() => setSelectedScopes(isAllScopesSelected ? [] : EXPUNGE_SCOPE_OPTIONS.map((scope) => scope.id))}
             disabled={isClearing}
             className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium transition-all hover:bg-[var(--secondary)] active:scale-95 disabled:opacity-50"
           >

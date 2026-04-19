@@ -1,4 +1,4 @@
-import { MessageCircle, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, MessageCircle, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
 
 interface ThoughtBubble {
   agentId: string;
@@ -18,6 +18,8 @@ interface RoleplayHUDActionsMenuProps {
   echoMessageCount: number;
   clearGameState: () => void;
   onRetriggerTrackers?: () => void;
+  onRetryFailedAgents?: () => void;
+  failedAgentTypes?: string[];
   onClose: () => void;
 }
 
@@ -32,6 +34,8 @@ export function RoleplayHUDActionsMenu({
   echoMessageCount,
   clearGameState,
   onRetriggerTrackers,
+  onRetryFailedAgents,
+  failedAgentTypes,
   onClose,
 }: RoleplayHUDActionsMenuProps) {
   const uniqueAgentCount = new Set(thoughtBubbles.map((bubble) => bubble.agentId)).size;
@@ -120,6 +124,19 @@ export function RoleplayHUDActionsMenu({
           >
             <RefreshCw size="0.6875rem" className={isAgentProcessing ? "animate-spin" : ""} />
             {isAgentProcessing ? "Running…" : "Re-run Trackers"}
+          </button>
+        )}
+        {onRetryFailedAgents && failedAgentTypes && failedAgentTypes.length > 0 && (
+          <button
+            onClick={() => {
+              onRetryFailedAgents();
+              onClose();
+            }}
+            disabled={isAgentProcessing}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[0.625rem] font-medium text-amber-300 transition-colors hover:bg-amber-500/10 disabled:opacity-50"
+          >
+            <AlertTriangle size="0.6875rem" className={isAgentProcessing ? "animate-pulse" : ""} />
+            {isAgentProcessing ? "Retrying…" : `Retry Failed Agents (${failedAgentTypes.length})`}
           </button>
         )}
       </div>

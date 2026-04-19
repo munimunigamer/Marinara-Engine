@@ -95,7 +95,9 @@ export async function adminRoutes(app: FastifyInstance) {
 
     if (requestedScopes.includes("characters")) {
       await runDelete("character_groups", () => db.delete(schema.characterGroups).run());
-      await runDelete("characters", () => db.delete(schema.characters).where(ne(schema.characters.id, PROFESSOR_MARI_ID)).run());
+      await runDelete("characters", () =>
+        db.delete(schema.characters).where(ne(schema.characters.id, PROFESSOR_MARI_ID)).run(),
+      );
     }
 
     if (requestedScopes.includes("personas")) {

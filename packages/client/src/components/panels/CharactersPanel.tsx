@@ -13,9 +13,10 @@ import {
   useUpdateCharacter,
   useDuplicateCharacter,
 } from "../../hooks/use-characters";
-import { useUpdateChat, useCreateMessage, chatKeys } from "../../hooks/use-chats";
+import { useUpdateChat, useCreateMessage, useCreateChat, chatKeys } from "../../hooks/use-chats";
 import { api } from "../../lib/api-client";
 import { useChatStore } from "../../stores/chat.store";
+import { ContextMenu, type ContextMenuItem } from "../ui/ContextMenu";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
@@ -39,6 +40,7 @@ import {
   Tag,
   MessageCircle,
   Star,
+  Wand2,
 } from "lucide-react";
 import { useUIStore } from "../../stores/ui.store";
 import { cn, getAvatarCropStyle } from "../../lib/utils";
@@ -88,7 +90,64 @@ export function CharactersPanel() {
   const activeChat = useChatStore((s) => s.activeChat);
   const updateChat = useUpdateChat();
   const createMessage = useCreateMessage(activeChat?.id ?? null);
+  const createChat = useCreateChat();
   const queryClient = useQueryClient();
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    charId: string;
+    charName: string;
+    firstMes?: string;
+    altGreetings?: string[];
+  } | null>(null);
+
+  const quickStartFromCharacter = useCallback(
+    (
+      charId: string,
+      charName: string,
+      mode: "roleplay" | "conversation",
+      firstMes?: string,
+      altGreetings?: string[],
+    ) => {
+      const label = mode === "conversation" ? "Conversation" : "Roleplay";
+      createChat.mutate(
+        { name: charName ? `${charName} — ${label}` : `New ${label}`, mode, characterIds: [charId] },
+        {
+          onSuccess: async (chat) => {
+            useChatStore.getState().setActiveChatId(chat.id);
+            // Mirror the wizard's roleplay first-message behavior — without this,
+            // a quick-started roleplay would open with no greeting from the character.
+            if (mode === "roleplay" && firstMes?.trim()) {
+              try {
+                const msg = await api.post<{ id: string }>(`/chats/${chat.id}/messages`, {
+                  role: "assistant",
+                  content: firstMes,
+                  characterId: charId,
+                });
+                if (msg?.id && altGreetings?.length) {
+                  for (const greeting of altGreetings) {
+                    if (greeting.trim()) {
+                      await api.post(`/chats/${chat.id}/messages/${msg.id}/swipes`, {
+                        content: greeting,
+                        silent: true,
+                      });
+                    }
+                  }
+                }
+                queryClient.invalidateQueries({ queryKey: chatKeys.messages(chat.id) });
+              } catch {
+                /* swallow — don't block the chat from opening if greeting injection fails */
+              }
+            }
+            useChatStore.getState().setShouldOpenSettings(true);
+            useChatStore.getState().setShouldOpenWizard(true);
+            useChatStore.getState().setShouldOpenWizardInShortcutMode(true);
+          },
+        },
+      );
+    },
+    [createChat, queryClient],
+  );
 
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortOption>("name-asc");
@@ -344,11 +403,7 @@ export function CharactersPanel() {
     if (selectedCharacterIds.size === 0) return;
     setExportingSelected(true);
     try {
-      await api.downloadPost(
-        "/characters/export-bulk",
-        { ids: [...selectedCharacterIds] },
-        "marinara-characters.zip",
-      );
+      await api.downloadPost("/characters/export-bulk", { ids: [...selectedCharacterIds] }, "marinara-characters.zip");
       toast.success(`Exported ${selectedCharacterIds.size} character${selectedCharacterIds.size === 1 ? "" : "s"}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to export characters");
@@ -482,21 +537,23 @@ export function CharactersPanel() {
         <button
           onClick={() => openModal("create-character")}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-pink-400 to-purple-500 px-3 py-2 text-xs font-medium text-white shadow-md shadow-pink-500/15 transition-all hover:shadow-lg hover:shadow-pink-500/25 active:scale-[0.98]"
+          title="New"
         >
-          <Plus size="0.75rem" /> New
+          <Plus size="0.75rem" /> <span className="md:hidden">New</span>
         </button>
         <button
           onClick={() => openModal("import-character")}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--secondary)] px-3 py-2 text-xs font-medium text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-[0.98]"
+          title="Import"
         >
-          <Download size="0.75rem" /> Import
+          <Download size="0.75rem" /> <span className="md:hidden">Import</span>
         </button>
         <button
           onClick={() => openModal("character-maker")}
-          className="flex w-9 items-center justify-center rounded-xl bg-gradient-to-r from-violet-400 to-fuchsia-500 py-2 text-xs font-medium text-white shadow-md shadow-violet-500/15 transition-all hover:shadow-lg hover:shadow-violet-500/25 active:scale-[0.98]"
-          title="AI Character Maker"
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--secondary)] px-3 py-2 text-xs font-medium text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-[0.98]"
+          title="AI Maker"
         >
-          <Sparkles size="0.75rem" />
+          <Sparkles size="0.75rem" /> <span className="md:hidden">Maker</span>
         </button>
         <button
           onClick={() => {
@@ -508,14 +565,15 @@ export function CharactersPanel() {
             }
           }}
           className={cn(
-            "flex items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium transition-all",
+            "flex flex-1 items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium transition-all",
             selectionMode
               ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/30"
               : "bg-[var(--secondary)] text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
           )}
+          title="Select"
         >
           <Check size="0.75rem" />
-          Select
+          <span className="md:hidden">Select</span>
         </button>
       </div>
 
@@ -722,6 +780,19 @@ export function CharactersPanel() {
                           <div
                             key={memberId}
                             onClick={() => openCharacterDetail(memberId)}
+                            onContextMenu={(e) => {
+                              if (selectionMode || assigningToGroup) return;
+                              e.preventDefault();
+                              const fullMember = parsedCharacters.find((c) => c.id === memberId);
+                              setContextMenu({
+                                x: e.clientX,
+                                y: e.clientY,
+                                charId: memberId,
+                                charName: member.name,
+                                firstMes: fullMember?.parsed?.first_mes as string | undefined,
+                                altGreetings: (fullMember?.parsed?.alternate_greetings ?? []) as string[],
+                              });
+                            }}
                             className="group/member flex cursor-pointer items-center gap-2 rounded-lg p-1.5 transition-all hover:bg-[var(--sidebar-accent)]"
                           >
                             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg overflow-hidden bg-gradient-to-br from-pink-400 to-rose-500 text-white">
@@ -783,7 +854,9 @@ export function CharactersPanel() {
       <div className="flex items-center gap-1.5 px-1 pt-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
         <User size="0.6875rem" />
         Characters ({filteredCharacters.length})
-        {selectionMode && <span className="text-[0.625rem] font-normal normal-case">· {selectedCharacterIds.size} selected</span>}
+        {selectionMode && (
+          <span className="text-[0.625rem] font-normal normal-case">· {selectedCharacterIds.size} selected</span>
+        )}
       </div>
 
       {/* Character list */}
@@ -828,6 +901,18 @@ export function CharactersPanel() {
                 } else {
                   openCharacterDetail(char.id);
                 }
+              }}
+              onContextMenu={(e) => {
+                if (selectionMode || assigningToGroup) return;
+                e.preventDefault();
+                setContextMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  charId: char.id,
+                  charName,
+                  firstMes: char.parsed?.first_mes as string | undefined,
+                  altGreetings: (char.parsed?.alternate_greetings ?? []) as string[],
+                });
               }}
               className={cn(
                 "group flex items-center gap-2.5 rounded-xl p-2 transition-all hover:bg-[var(--sidebar-accent)] cursor-pointer",
@@ -991,6 +1076,30 @@ export function CharactersPanel() {
           Click to edit · Use ✓ to assign/remove from chat
         </p>
       )}
+
+      {contextMenu &&
+        (() => {
+          const items: ContextMenuItem[] = [
+            {
+              label: "Quick Start Roleplay",
+              icon: <Wand2 size="0.75rem" />,
+              onSelect: () =>
+                quickStartFromCharacter(
+                  contextMenu.charId,
+                  contextMenu.charName,
+                  "roleplay",
+                  contextMenu.firstMes,
+                  contextMenu.altGreetings,
+                ),
+            },
+            {
+              label: "Quick Start Conversation",
+              icon: <MessageCircle size="0.75rem" />,
+              onSelect: () => quickStartFromCharacter(contextMenu.charId, contextMenu.charName, "conversation"),
+            },
+          ];
+          return <ContextMenu x={contextMenu.x} y={contextMenu.y} items={items} onClose={() => setContextMenu(null)} />;
+        })()}
 
       {/* First message confirmation dialog */}
       {firstMesConfirm && (

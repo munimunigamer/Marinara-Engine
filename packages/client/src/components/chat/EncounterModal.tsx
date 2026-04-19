@@ -19,11 +19,13 @@ import {
   FlaskConical,
   RefreshCw,
   Zap,
+  Wand2,
 } from "lucide-react";
 import { useEncounterStore } from "../../stores/encounter.store";
 import { useEncounter } from "../../hooks/use-encounter";
+import { useLorebooks } from "../../hooks/use-lorebooks";
 import { cn } from "../../lib/utils";
-import type { CombatPartyMember, CombatEnemy, CombatAttack, NarrativeStyle } from "@marinara-engine/shared";
+import type { CombatPartyMember, CombatEnemy, CombatAttack, NarrativeStyle, Lorebook } from "@marinara-engine/shared";
 
 // ──────────────────────────────────────────────
 // Sub-components
@@ -311,7 +313,12 @@ function EncounterConfig() {
   const settings = useEncounterStore((s) => s.settings);
   const updateSettings = useEncounterStore((s) => s.updateSettings);
   const closeConfigModal = useEncounterStore((s) => s.closeConfigModal);
+  const spellbookId = useEncounterStore((s) => s.spellbookId);
+  const setSpellbookId = useEncounterStore((s) => s.setSpellbookId);
   const { initEncounter } = useEncounter();
+
+  const { data: lorebooks } = useLorebooks("spellbook");
+  const spellbooks = (lorebooks ?? []) as Lorebook[];
 
   return (
     <motion.div
@@ -345,6 +352,29 @@ function EncounterConfig() {
             value={settings.summaryNarrative}
             onChange={(v) => updateSettings({ summaryNarrative: v })}
           />
+
+          {/* Spellbook selection */}
+          <div className="space-y-2">
+            <h4 className="flex items-center gap-1.5 text-xs font-bold text-white/70">
+              <Wand2 size="0.75rem" className="text-indigo-400" />
+              Spellbook
+            </h4>
+            <p className="text-[0.625rem] leading-relaxed text-white/40">
+              Attach a spellbook so the AI knows which spells and abilities are available in combat.
+            </p>
+            <select
+              value={spellbookId ?? ""}
+              onChange={(e) => setSpellbookId(e.target.value || null)}
+              className="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white/80"
+            >
+              <option value="">None</option>
+              {spellbooks.map((lb) => (
+                <option key={lb.id} value={lb.id}>
+                  {lb.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="mt-6 flex gap-3">

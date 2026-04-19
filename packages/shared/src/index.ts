@@ -18,10 +18,14 @@ export * from "./types/regex.js";
 export * from "./types/export.js";
 export * from "./types/haptic.js";
 export * from "./types/theme.js";
+export * from "./types/chat-preset.js";
+export * from "./types/game.js";
+export * from "./types/sidecar.js";
 export * from "./types/world-graph.js";
 
 // Schemas
 export * from "./schemas/chat.schema.js";
+export * from "./schemas/chat-preset.schema.js";
 export * from "./schemas/character.schema.js";
 export * from "./schemas/lorebook.schema.js";
 export * from "./schemas/prompt.schema.js";
@@ -44,3 +48,4 @@ export * from "./constants/world-graph-sync.js";
 // Utils
 export * from "./utils/macro-engine.js";
 export * from "./utils/xml-wrapper.js";
+export * from "./utils/music-score.js";

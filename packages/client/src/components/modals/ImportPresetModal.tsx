@@ -51,7 +51,7 @@ export function ImportPresetModal({ open, onClose }: Props) {
               },
             };
 
-        const data = await api.post<{ success: boolean; error?: string }> (endpoint, payload);
+        const data = await api.post<{ success: boolean; error?: string }>(endpoint, payload);
         nextResults.push({
           filename: file.name,
           success: data.success,

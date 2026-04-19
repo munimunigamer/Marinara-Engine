@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Modal } from "../ui/Modal";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api-client";
-import { Loader2, BookOpen } from "lucide-react";
+import { Loader2, BookOpen, AlertCircle } from "lucide-react";
 
 interface Props {
   open: boolean;
@@ -61,14 +61,23 @@ export function CreateLorebookModal({ open, onClose }: Props) {
           />
         </label>
 
+        {createLorebook.isError && (
+          <div className="flex items-center gap-2 rounded-lg bg-[var(--destructive)]/10 p-2.5 text-xs text-[var(--destructive)]">
+            <AlertCircle size="0.75rem" className="shrink-0" />
+            {createLorebook.error instanceof Error ? createLorebook.error.message : "Failed to create lorebook"}
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 border-t border-[var(--border)] pt-3">
           <button
+            type="button"
             onClick={onClose}
             className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={() => createLorebook.mutate(form)}
             disabled={!form.name.trim() || createLorebook.isPending}
             className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-all hover:opacity-90 disabled:opacity-50"

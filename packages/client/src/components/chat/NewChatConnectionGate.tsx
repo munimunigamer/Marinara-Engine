@@ -6,11 +6,12 @@ import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
 import { cn } from "../../lib/utils";
 
-type Mode = "conversation" | "roleplay";
+type Mode = "conversation" | "roleplay" | "game";
 
 const MODE_META: Record<Mode, { label: string; icon: React.ReactNode }> = {
   conversation: { label: "Conversation", icon: <MessageCircle size="0.875rem" /> },
   roleplay: { label: "Roleplay", icon: <BookOpen size="0.875rem" /> },
+  game: { label: "Game", icon: <BookOpen size="0.875rem" /> },
 };
 
 interface NewChatConnectionGateProps {
@@ -24,10 +25,7 @@ export function NewChatConnectionGate({ mode, onClose }: NewChatConnectionGatePr
   const openRightPanel = useUIStore((s) => s.openRightPanel);
   const [connectionId, setConnectionId] = useState<string>("");
 
-  const connectionRows = useMemo(
-    () => ((connections ?? []) as Array<{ id: string; name: string }>),
-    [connections],
-  );
+  const connectionRows = useMemo(() => (connections ?? []) as Array<{ id: string; name: string }>, [connections]);
 
   useEffect(() => {
     if (connectionRows.length === 0) {
@@ -71,7 +69,9 @@ export function NewChatConnectionGate({ mode, onClose }: NewChatConnectionGatePr
               <span className="text-[var(--primary)]">{MODE_META[mode].icon}</span>
               <div>
                 <h3 className="text-sm font-semibold">Set Up {MODE_META[mode].label}</h3>
-                <p className="text-[0.6875rem] text-[var(--muted-foreground)]">Choose a connection before we create the chat.</p>
+                <p className="text-[0.6875rem] text-[var(--muted-foreground)]">
+                  Choose a connection before we create the chat.
+                </p>
               </div>
             </div>
             <button

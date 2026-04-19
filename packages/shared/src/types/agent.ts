@@ -32,7 +32,11 @@ export type AgentResultType =
   | "spotify_control"
   | "haptic_command"
   | "cyoa_choices"
-  | "secret_plot";
+  | "secret_plot"
+  | "game_master_narration"
+  | "party_action"
+  | "game_map_update"
+  | "game_state_transition";
 
 /** Configuration for a single agent. */
 export interface AgentConfig {
@@ -151,6 +155,8 @@ export const BUILT_IN_AGENT_IDS = {
   HAPTIC: "haptic",
   CYOA: "cyoa",
   SECRET_PLOT_DRIVER: "secret-plot-driver",
+  GAME_MASTER: "game-master",
+  PARTY_PLAYER: "party-player",
 } as const;
 
 export type AgentCategory = "writer" | "tracker" | "misc";
@@ -415,6 +421,27 @@ export const BUILT_IN_AGENTS: BuiltInAgentMeta[] = [
     defaultInjectAsSection: true,
     category: "writer",
   },
+
+  // ── Game Agents ──
+  {
+    id: "game-master",
+    name: "Game Master",
+    description:
+      "Narrates the RPG, handles dice rolls, manages NPCs, combat triggers, state transitions, map updates, story pacing, and session flow. The primary responder in Game mode.",
+    phase: "pre_generation",
+    enabledByDefault: false,
+    defaultInjectAsSection: true,
+    category: "misc",
+  },
+  {
+    id: "party-player",
+    name: "Party Player",
+    description:
+      "Controls non-player party members autonomously — their dialogue, actions, and decisions. Only sees public narration and party chat (no GM secrets like story arcs or plot twists).",
+    phase: "parallel",
+    enabledByDefault: false,
+    category: "misc",
+  },
 ];
 
 /** Recommended default tools for each built-in agent type. */
@@ -452,6 +479,8 @@ export const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
   haptic: [],
   cyoa: [],
   "secret-plot-driver": [],
+  "game-master": ["roll_dice", "update_game_state"],
+  "party-player": [],
 };
 
 /** Data shape for a lorebook_update agent result. */

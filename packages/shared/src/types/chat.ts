@@ -2,8 +2,8 @@
 // Chat & Message Types
 // ──────────────────────────────────────────────
 
-/** The three primary chat modes the engine supports. */
-export type ChatMode = "conversation" | "roleplay" | "visual_novel";
+/** The four primary chat modes the engine supports. */
+export type ChatMode = "conversation" | "roleplay" | "visual_novel" | "game";
 
 /** How a multi-character (group) chat is handled. */
 export type GroupChatMode = "merged" | "individual";
@@ -100,6 +100,42 @@ export interface ChatMetadata {
   /** Per-chat ephemeral / enabled overrides for lorebook entries (entryId → state).
    *  Tracked per-chat so ephemeral countdown in one chat doesn't affect others. */
   entryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean }>;
+  /** ID of the chat preset most recently applied to this chat (drives the preset bar dropdown). */
+  appliedChatPresetId?: string | null;
+  // ── Game Mode Fields ──
+  /** UUID linking all sessions of one game */
+  gameId?: string;
+  /** Session number within a game (1-based) */
+  gameSessionNumber?: number;
+  /** Current session lifecycle status */
+  gameSessionStatus?: import("./game.js").GameSessionStatus;
+  /** Current game state (exploration, dialogue, combat, travel_rest) */
+  gameActiveState?: import("./game.js").GameActiveState;
+  /** Whether GM is a standalone narrator or an existing character */
+  gameGmMode?: import("./game.js").GameGmMode;
+  /** Character ID used as GM (when gameGmMode is "character") */
+  gameGmCharacterId?: string;
+  /** Character IDs for the player's party */
+  gamePartyCharacterIds?: string[];
+  /** ID of the linked party chat */
+  gamePartyChatId?: string;
+  /** Current area map */
+  gameMap?: import("./game.js").GameMap | null;
+  /** Summaries of all previous sessions */
+  gamePreviousSessionSummaries?: import("./game.js").SessionSummary[];
+  /** GM-only: overarching story arc and plot (never sent to party agent) */
+  gameStoryArc?: string;
+  /** GM-only: planned plot twists (never sent to party agent) */
+  gamePlotTwists?: string[];
+  /** Active dialogue sub-scene chat ID */
+  gameDialogueChatId?: string | null;
+  /** Active combat sub-scene chat ID */
+  gameCombatChatId?: string | null;
+  /** User's initial game setup preferences */
+  gameSetupConfig?: import("./game.js").GameSetupConfig | null;
+  /** Tracked NPCs with reputation */
+  gameNpcs?: import("./game.js").GameNpc[];
+
   /** Any extra key-value data */
   [key: string]: unknown;
 }

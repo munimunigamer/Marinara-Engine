@@ -7,6 +7,7 @@ import { join, extname, basename, parse as parsePath } from "path";
 import { pipeline } from "stream/promises";
 import { createWriteStream } from "fs";
 import { DATA_DIR } from "../utils/data-dir.js";
+import { buildAssetManifest } from "../services/game/asset-manifest.service.js";
 
 const BG_DIR = join(DATA_DIR, "backgrounds");
 const META_PATH = join(BG_DIR, "meta.json");
@@ -107,6 +108,9 @@ export async function backgroundsRoutes(app: FastifyInstance) {
     meta[safeName] = { originalName: data.filename, tags: [] };
     writeMeta(meta);
 
+    // Rebuild game asset manifest so scene analysis picks up new backgrounds
+    buildAssetManifest();
+
     return {
       success: true,
       filename: safeName,
@@ -197,6 +201,9 @@ export async function backgroundsRoutes(app: FastifyInstance) {
     }
     writeMeta(meta);
 
+    // Rebuild game asset manifest
+    buildAssetManifest();
+
     return {
       success: true,
       oldFilename: filename,
@@ -258,6 +265,9 @@ export async function backgroundsRoutes(app: FastifyInstance) {
     const meta = readMeta();
     delete meta[filename];
     writeMeta(meta);
+
+    // Rebuild game asset manifest
+    buildAssetManifest();
 
     return { success: true };
   });

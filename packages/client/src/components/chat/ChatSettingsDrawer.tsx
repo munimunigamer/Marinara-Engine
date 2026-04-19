@@ -39,6 +39,10 @@ import {
   Feather,
   Activity,
   Puzzle,
+  Save,
+  FilePlus2,
+  Upload,
+  Download,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -47,7 +51,7 @@ import { ChoiceSelectionModal } from "../presets/ChoiceSelectionModal";
 import { useCharacters, useCharacterSprites, usePersonas, useCharacterGroups } from "../../hooks/use-characters";
 import { useLorebooks } from "../../hooks/use-lorebooks";
 import { usePresets } from "../../hooks/use-presets";
-import { useConnections } from "../../hooks/use-connections";
+import { useConnections, useSaveConnectionDefaults } from "../../hooks/use-connections";
 import {
   useUpdateChat,
   useUpdateChatMetadata,
@@ -59,6 +63,16 @@ import {
 } from "../../hooks/use-chats";
 import { api } from "../../lib/api-client";
 import { useUIStore } from "../../stores/ui.store";
+import {
+  useChatPresets,
+  useSaveChatPresetSettings,
+  useDuplicateChatPreset,
+  useUpdateChatPreset,
+  useDeleteChatPreset,
+  useApplyChatPreset,
+  useImportChatPreset,
+} from "../../hooks/use-chat-presets";
+import type { ChatMode, ChatPreset, ChatPresetSettings } from "@marinara-engine/shared";
 import { useAgentConfigs, type AgentConfigRow } from "../../hooks/use-agents";
 import { BUILT_IN_AGENTS, BUILT_IN_TOOLS } from "@marinara-engine/shared";
 import type { Chat, CharacterGroup } from "@marinara-engine/shared";
@@ -105,6 +119,13 @@ export function ChatSettingsDrawer({
   const { data: lorebooks } = useLorebooks();
   const { data: presets } = usePresets();
   const { data: connections } = useConnections();
+  const imageConnectionsList = useMemo(
+    () =>
+      ((connections as Array<{ id: string; name: string; model?: string; provider?: string }>) ?? []).filter(
+        (c) => c.provider === "image_generation",
+      ),
+    [connections],
+  );
   const { data: allPersonas } = usePersonas();
   const { data: agentConfigs } = useAgentConfigs();
   const { data: customTools } = useCustomTools();
@@ -116,12 +137,18 @@ export function ChatSettingsDrawer({
     avatarPath: string | null;
   }>;
 
-  const chatCharIds: string[] =
-    typeof chat.characterIds === "string" ? JSON.parse(chat.characterIds) : (chat.characterIds ?? []);
+  const chatCharIds: string[] = useMemo(
+    () => (typeof chat.characterIds === "string" ? JSON.parse(chat.characterIds) : (chat.characterIds ?? [])),
+    [chat.characterIds],
+  );
 
-  const metadata = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
+  const metadata = useMemo(
+    () => (typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {})),
+    [chat.metadata],
+  );
   const chatMode = (chat as unknown as { mode?: string }).mode ?? "roleplay";
   const isConversation = chatMode === "conversation";
+  const isGame = chatMode === "game";
   const activeLorebookIds: string[] = metadata.activeLorebookIds ?? [];
   const activeAgentIds: string[] = metadata.activeAgentIds ?? [];
   const activeToolIds: string[] = metadata.activeToolIds ?? [];
@@ -380,6 +407,10 @@ export function ChatSettingsDrawer({
     updateChat.mutate({ id: chat.id, connectionId });
   };
 
+  const setPartyConnection = (connectionId: string | null) => {
+    updateMeta.mutate({ id: chat.id, gameCharacterConnectionId: connectionId });
+  };
+
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(chat.name);
   const [showCharPicker, setShowCharPicker] = useState(false);
@@ -399,6 +430,134 @@ export function ChatSettingsDrawer({
   const [scenePromptDraft, setScenePromptDraft] = useState(metadata.sceneSystemPrompt ?? "");
   const [groupScenarioDraft, setGroupScenarioDraft] = useState((metadata.groupScenarioText as string) ?? "");
   const [groupScenarioExpanded, setGroupScenarioExpanded] = useState(false);
+  const [gameAgentPool] = useState<string[]>(() => Array.from(new Set(activeAgentIds)));
+  const [extraPromptDraft, setExtraPromptDraft] = useState((metadata.gameExtraPrompt as string) ?? "");
+  const [extraPromptExpanded, setExtraPromptExpanded] = useState(false);
+
+  // ── Chat Settings Presets ──
+  const presetMode = (chatMode === "visual_novel" ? "roleplay" : chatMode) as ChatMode;
+  const { data: chatPresets } = useChatPresets(presetMode);
+  const saveChatPreset = useSaveChatPresetSettings();
+  const duplicateChatPreset = useDuplicateChatPreset();
+  const renameChatPreset = useUpdateChatPreset();
+  const deleteChatPreset = useDeleteChatPreset();
+  const applyChatPreset = useApplyChatPreset();
+  const importChatPreset = useImportChatPreset();
+  const presetList = useMemo(() => (chatPresets ?? []) as ChatPreset[], [chatPresets]);
+  const appliedPresetId = (metadata.appliedChatPresetId as string | undefined) ?? null;
+  const selectedChatPreset = useMemo(() => {
+    if (appliedPresetId) {
+      const match = presetList.find((p) => p.id === appliedPresetId);
+      if (match) return match;
+    }
+    return presetList.find((p) => p.isDefault) ?? null;
+  }, [presetList, appliedPresetId]);
+  const [renamingPreset, setRenamingPreset] = useState(false);
+  const [renamePresetVal, setRenamePresetVal] = useState("");
+  const presetFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const snapshotCurrentPresetSettings = useCallback((): ChatPresetSettings => {
+    return {
+      connectionId: chat.connectionId ?? null,
+      promptPresetId: chat.promptPresetId ?? null,
+      metadata: { ...metadata },
+    };
+  }, [chat.connectionId, chat.promptPresetId, metadata]);
+
+  const handleSelectPreset = (id: string) => {
+    if (!id || id === selectedChatPreset?.id) return;
+    applyChatPreset.mutate({ presetId: id, chatId: chat.id });
+  };
+
+  const handleSaveIntoPreset = () => {
+    if (!selectedChatPreset || selectedChatPreset.isDefault) return;
+    saveChatPreset.mutate({ id: selectedChatPreset.id, settings: snapshotCurrentPresetSettings() });
+  };
+
+  const handleStartRenamePreset = () => {
+    if (!selectedChatPreset || selectedChatPreset.isDefault) return;
+    setRenamePresetVal(selectedChatPreset.name);
+    setRenamingPreset(true);
+  };
+
+  const handleCommitRenamePreset = () => {
+    if (!selectedChatPreset || selectedChatPreset.isDefault) {
+      setRenamingPreset(false);
+      return;
+    }
+    const next = renamePresetVal.trim();
+    if (next && next !== selectedChatPreset.name) {
+      renameChatPreset.mutate({ id: selectedChatPreset.id, name: next });
+    }
+    setRenamingPreset(false);
+  };
+
+  const handleSaveAsPreset = () => {
+    if (!selectedChatPreset) return;
+    const baseName = window.prompt("Name for the new preset:", `${selectedChatPreset.name} Copy`);
+    if (!baseName?.trim()) return;
+    const trimmed = baseName.trim().slice(0, 120);
+    duplicateChatPreset.mutate(
+      { id: selectedChatPreset.id, name: trimmed },
+      {
+        onSuccess: (created) => {
+          if (!created) return;
+          // Save the current chat settings into the new preset, then apply it
+          // (which records appliedChatPresetId on the chat so the dropdown follows).
+          saveChatPreset.mutate(
+            { id: created.id, settings: snapshotCurrentPresetSettings() },
+            {
+              onSuccess: () => applyChatPreset.mutate({ presetId: created.id, chatId: chat.id }),
+            },
+          );
+        },
+      },
+    );
+  };
+
+  const handleDeletePreset = () => {
+    if (!selectedChatPreset || selectedChatPreset.isDefault) return;
+    const ok = window.confirm(`Delete preset "${selectedChatPreset.name}"? This cannot be undone.`);
+    if (!ok) return;
+    const wasApplied = selectedChatPreset.id === appliedPresetId;
+    const defaultPreset = presetList.find((p) => p.isDefault);
+    deleteChatPreset.mutate(selectedChatPreset.id, {
+      onSuccess: () => {
+        // If the chat was using the preset we just deleted, fall back to the
+        // Default preset's settings — without this, the chat would visually
+        // show "Default" but keep the deleted preset's actual values.
+        if (wasApplied && defaultPreset) {
+          applyChatPreset.mutate({ presetId: defaultPreset.id, chatId: chat.id });
+        }
+      },
+    });
+  };
+
+  const handleExportPreset = () => {
+    if (!selectedChatPreset) return;
+    api.download(
+      `/chat-presets/${selectedChatPreset.id}/export`,
+      `${selectedChatPreset.name}.marinara-chat-preset.json`,
+    );
+  };
+
+  const handleImportClick = () => {
+    presetFileInputRef.current?.click();
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-importing the same file
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const envelope = JSON.parse(text);
+      const created = await importChatPreset.mutateAsync(envelope);
+      if (created?.id) applyChatPreset.mutate({ presetId: created.id, chatId: chat.id });
+    } catch (err) {
+      window.alert(`Failed to import preset: ${err instanceof Error ? err.message : "Invalid file"}`);
+    }
+  };
 
   const saveName = () => {
     if (nameVal.trim() && nameVal !== chat.name) {
@@ -425,6 +584,107 @@ export function ChatSettingsDrawer({
           >
             <X size="1rem" />
           </button>
+        </div>
+
+        {/* Chat Settings Preset bar */}
+        <div className="flex flex-col gap-2 border-b border-[var(--border)] px-4 py-3">
+          <input
+            ref={presetFileInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={handleImportFile}
+          />
+          {/* Dropdown / rename input + help */}
+          <div className="flex items-center gap-2">
+            {renamingPreset ? (
+              <input
+                value={renamePresetVal}
+                onChange={(e) => setRenamePresetVal(e.target.value)}
+                onBlur={handleCommitRenamePreset}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCommitRenamePreset();
+                  else if (e.key === "Escape") setRenamingPreset(false);
+                }}
+                autoFocus
+                maxLength={120}
+                className="flex-1 min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-[var(--primary)]/40"
+              />
+            ) : (
+              <select
+                value={selectedChatPreset?.id ?? ""}
+                onChange={(e) => handleSelectPreset(e.target.value)}
+                title="Apply a chat-settings preset to this chat"
+                className="flex-1 min-w-0 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+              >
+                {presetList.length === 0 && <option value="">Loading…</option>}
+                {presetList.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.isDefault ? "Default" : p.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <HelpTooltip
+              side="left"
+              text="Presets bundle this chat's connection, prompt preset, agents, tools, translation, memory recall, advanced parameters, and other settings. They never touch your characters, persona, lorebooks, sprites, summary, tags, or scene prompt — those stay tied to the chat."
+            />
+          </div>
+          {/* Single row of all preset actions */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleSaveIntoPreset}
+              disabled={!selectedChatPreset || selectedChatPreset.isDefault}
+              title={
+                selectedChatPreset?.isDefault
+                  ? "Cannot save into the Default preset"
+                  : "Save current chat settings into this preset"
+              }
+              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Save size="0.875rem" />
+            </button>
+            <button
+              onClick={handleStartRenamePreset}
+              disabled={!selectedChatPreset || selectedChatPreset.isDefault}
+              title={selectedChatPreset?.isDefault ? "Cannot rename the Default preset" : "Rename preset"}
+              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Pencil size="0.875rem" />
+            </button>
+            <button
+              onClick={handleSaveAsPreset}
+              disabled={!selectedChatPreset}
+              title="Save current chat settings as a new preset"
+              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FilePlus2 size="0.875rem" />
+            </button>
+            <span className="mx-1 h-4 w-px shrink-0 bg-[var(--border)]" aria-hidden />
+            <button
+              onClick={handleImportClick}
+              title="Import preset (.json)"
+              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+            >
+              <Upload size="0.875rem" />
+            </button>
+            <button
+              onClick={handleExportPreset}
+              disabled={!selectedChatPreset}
+              title="Export preset (.json)"
+              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Download size="0.875rem" />
+            </button>
+            <button
+              onClick={handleDeletePreset}
+              disabled={!selectedChatPreset || selectedChatPreset.isDefault}
+              title={selectedChatPreset?.isDefault ? "Cannot delete the Default preset" : "Delete preset"}
+              className="flex-1 flex items-center justify-center rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Trash2 size="0.875rem" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -464,30 +724,78 @@ export function ChatSettingsDrawer({
           <Section
             label="Connection"
             icon={<Plug size="0.875rem" />}
-            help="Which AI provider and model to use for this chat. 'Random' picks a different connection each time from your random pool."
+            help={
+              isGame
+                ? "Separate AI models for the Game Master (narration, world, NPCs) and the Party chat (inter-character banter)."
+                : "Which AI provider and model to use for this chat. 'Random' picks a different connection each time from your random pool."
+            }
           >
-            <select
-              value={chat.connectionId ?? ""}
-              onChange={(e) => setConnection(e.target.value || null)}
-              className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
-            >
-              <option value="">None</option>
-              <option value="random">🎲 Random</option>
-              {((connections ?? []) as Array<{ id: string; name: string }>).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            {chat.connectionId === "random" && (
-              <p className="mt-1.5 text-[0.625rem] text-amber-400/80">
-                Each generation will randomly pick from connections marked for the random pool.
-              </p>
+            {isGame ? (
+              <div className="space-y-2">
+                <div>
+                  <label className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+                    GM Model
+                  </label>
+                  <select
+                    value={chat.connectionId ?? ""}
+                    onChange={(e) => setConnection(e.target.value || null)}
+                    className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                  >
+                    <option value="">None</option>
+                    <option value="random">🎲 Random</option>
+                    {((connections ?? []) as Array<{ id: string; name: string; model?: string }>).map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.model ? ` — ${c.model}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+                    Party AI Model
+                  </label>
+                  <select
+                    value={(metadata.gameCharacterConnectionId as string) ?? ""}
+                    onChange={(e) => setPartyConnection(e.target.value || null)}
+                    className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                  >
+                    <option value="">Same as GM</option>
+                    {((connections ?? []) as Array<{ id: string; name: string; model?: string }>).map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.model ? ` — ${c.model}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <>
+                <select
+                  value={chat.connectionId ?? ""}
+                  onChange={(e) => setConnection(e.target.value || null)}
+                  className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                >
+                  <option value="">None</option>
+                  <option value="random">🎲 Random</option>
+                  {((connections ?? []) as Array<{ id: string; name: string }>).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                {chat.connectionId === "random" && (
+                  <p className="mt-1.5 text-[0.625rem] text-amber-400/80">
+                    Each generation will randomly pick from connections marked for the random pool.
+                  </p>
+                )}
+              </>
             )}
           </Section>
 
-          {/* Preset — hidden for conversation mode (uses built-in DM prompt) */}
-          {!isConversation && !metadata.sceneSystemPrompt && (
+          {/* Preset — hidden for conversation mode and game mode */}
+          {!isConversation && !isGame && !metadata.sceneSystemPrompt && (
             <Section
               label="Prompt Preset"
               icon={<Sliders size="0.875rem" />}
@@ -516,6 +824,68 @@ export function ChatSettingsDrawer({
                   </button>
                 )}
               </div>
+            </Section>
+          )}
+
+          {/* Extra Prompt — game mode only */}
+          {isGame && (
+            <Section
+              label="Extra Prompt"
+              icon={<Feather size="0.875rem" />}
+              help="Additional instructions added to game generation prompts. Use this to suggest a writing style, ban themes, request specific behaviors, etc. Does not affect scene analysis."
+            >
+              <div className="space-y-1.5">
+                <div className="relative">
+                  <textarea
+                    value={extraPromptDraft}
+                    onChange={(e) => setExtraPromptDraft(e.target.value)}
+                    onBlur={() => {
+                      const stored = (metadata.gameExtraPrompt as string) ?? "";
+                      if (extraPromptDraft !== stored) {
+                        updateMeta.mutate({ id: chat.id, gameExtraPrompt: extraPromptDraft || null });
+                      }
+                    }}
+                    placeholder="e.g. Write in a poetic, literary style. Avoid graphic violence. Always describe the weather..."
+                    rows={5}
+                    className="w-full resize-y rounded-lg bg-[var(--secondary)] px-3 py-2 pr-8 text-xs leading-relaxed outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                  />
+                  <button
+                    onClick={() => setExtraPromptExpanded(true)}
+                    className="absolute right-1.5 top-1.5 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    title="Expand editor"
+                  >
+                    <Maximize2 size="0.75rem" />
+                  </button>
+                </div>
+                <p className="text-[0.5625rem] text-[var(--muted-foreground)]/70 px-0.5">
+                  {extraPromptDraft ? "Custom instructions active" : "No extra instructions set"}
+                </p>
+                {extraPromptDraft && (
+                  <button
+                    onClick={() => {
+                      setExtraPromptDraft("");
+                      updateMeta.mutate({ id: chat.id, gameExtraPrompt: null });
+                    }}
+                    className="rounded-lg bg-[var(--secondary)] px-2.5 py-1 text-[0.625rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-colors hover:bg-[var(--accent)]"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <ExpandedTextarea
+                open={extraPromptExpanded}
+                onClose={() => {
+                  setExtraPromptExpanded(false);
+                  const stored = (metadata.gameExtraPrompt as string) ?? "";
+                  if (extraPromptDraft !== stored) {
+                    updateMeta.mutate({ id: chat.id, gameExtraPrompt: extraPromptDraft || null });
+                  }
+                }}
+                title="Extra Prompt"
+                value={extraPromptDraft}
+                onChange={setExtraPromptDraft}
+                placeholder="Additional instructions for game generation..."
+              />
             </Section>
           )}
 
@@ -563,426 +933,525 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          {/* Persona */}
-          <Section
-            label="Persona"
-            icon={<Users size="0.875rem" />}
-            help="Your persona defines who you are in this chat. The AI will address you by this persona's name and use its details for context."
-          >
-            {/* Currently selected persona */}
-            {chat.personaId ? (
-              <div className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-2.5 py-2">
-                {(() => {
-                  const p = personas.find((p) => p.id === chat.personaId);
-                  return p ? (
-                    <>
-                      {p.avatarPath ? (
-                        <img
-                          src={p.avatarPath}
-                          alt={p.name}
-                          loading="lazy"
-                          className="h-7 w-7 shrink-0 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
-                          <User size="0.75rem" />
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <span className="block truncate text-xs">{p.name}</span>
-                        {p.comment && (
-                          <span className="block truncate text-[0.625rem] italic text-[var(--muted-foreground)]">
-                            {p.comment}
-                          </span>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <span className="flex-1 truncate text-xs text-[var(--muted-foreground)]">Unknown persona</span>
-                  );
-                })()}
-                <button
-                  onClick={() => updateChat.mutate({ id: chat.id, personaId: null })}
-                  className="ml-auto shrink-0 rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-                  title="Remove persona"
+          {/* Party (game mode) */}
+          {isGame && (
+            <Section
+              label="Party"
+              icon={<Users size="0.875rem" />}
+              count={chatCharIds.length + (chat.personaId ? 1 : 0)}
+              help="Your in-game party. Pick a persona to play as and manage which characters join the adventure."
+            >
+              <div className="space-y-1.5">
+                <label className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">Persona</label>
+                <select
+                  value={chat.personaId ?? ""}
+                  onChange={(e) => updateChat.mutate({ id: chat.id, personaId: e.target.value || null })}
+                  className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
                 >
-                  <X size="0.75rem" />
-                </button>
+                  <option value="">None</option>
+                  {personas.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
               </div>
-            ) : (
-              <p className="text-[0.6875rem] text-[var(--muted-foreground)]">No persona selected.</p>
-            )}
 
-            {/* Persona picker */}
-            {!showPersonaPicker ? (
-              <button
-                onClick={() => {
-                  setShowPersonaPicker(true);
-                  setPersonaSearch("");
-                }}
-                className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
-              >
-                <Plus size="0.75rem" /> {chat.personaId ? "Change" : "Choose"} Persona
-              </button>
-            ) : (
-              <PickerDropdown
-                search={personaSearch}
-                onSearchChange={setPersonaSearch}
-                onClose={() => setShowPersonaPicker(false)}
-                placeholder="Search personas..."
-              >
-                {/* None option */}
+              <div className="mt-2 space-y-1.5">
+                <label className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">Party Characters</label>
+                {chatCharIds.length === 0 ? (
+                  <p className="text-[0.6875rem] text-[var(--muted-foreground)]">No characters in party yet.</p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {chatCharIds.map((cid) => {
+                      const c = characters.find((ch) => ch.id === cid);
+                      if (!c) return null;
+                      const name = charName(c);
+                      return (
+                        <div
+                          key={c.id}
+                          className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
+                        >
+                          <span className="flex-1 truncate text-xs">{name}</span>
+                          <button
+                            onClick={() => toggleCharacter(c.id)}
+                            className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
+                            title="Remove from party"
+                          >
+                            <Trash2 size="0.6875rem" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {!showCharPicker ? (
                 <button
                   onClick={() => {
-                    updateChat.mutate({ id: chat.id, personaId: null });
-                    setShowPersonaPicker(false);
+                    setShowCharPicker(true);
+                    setCharSearch("");
                   }}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]",
-                    !chat.personaId && "bg-[var(--primary)]/10",
-                  )}
+                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
                 >
-                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--muted-foreground)]">
-                    <X size="0.625rem" />
-                  </div>
-                  <span className="flex-1 truncate text-xs">None</span>
-                  {!chat.personaId && <Check size="0.625rem" className="ml-auto shrink-0 text-[var(--primary)]" />}
+                  <Plus size="0.75rem" /> Add Character to Party
                 </button>
-                {personas
-                  .filter(
+              ) : (
+                <PickerDropdown
+                  search={charSearch}
+                  onSearchChange={setCharSearch}
+                  onClose={() => setShowCharPicker(false)}
+                  placeholder="Search characters…"
+                >
+                  {characters
+                    .filter((c) => !chatCharIds.includes(c.id))
+                    .filter((c) => charName(c).toLowerCase().includes(charSearch.toLowerCase()))
+                    .map((c) => {
+                      const name = charName(c);
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => {
+                            toggleCharacter(c.id);
+                            setShowCharPicker(false);
+                          }}
+                          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]"
+                        >
+                          <span className="flex-1 truncate text-xs">{name}</span>
+                          <Plus size="0.75rem" className="text-[var(--muted-foreground)]" />
+                        </button>
+                      );
+                    })}
+                </PickerDropdown>
+              )}
+            </Section>
+          )}
+
+          {/* Persona */}
+          {!isGame && (
+            <Section
+              label="Persona"
+              icon={<Users size="0.875rem" />}
+              help="Your persona defines who you are in this chat. The AI will address you by this persona's name and use its details for context."
+            >
+              {/* Currently selected persona */}
+              {chat.personaId ? (
+                <div className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-2.5 py-2">
+                  {(() => {
+                    const p = personas.find((p) => p.id === chat.personaId);
+                    return p ? (
+                      <>
+                        {p.avatarPath ? (
+                          <img
+                            src={p.avatarPath}
+                            alt={p.name}
+                            loading="lazy"
+                            className="h-7 w-7 shrink-0 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
+                            <User size="0.75rem" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <span className="block truncate text-xs">{p.name}</span>
+                          {p.comment && (
+                            <span className="block truncate text-[0.625rem] italic text-[var(--muted-foreground)]">
+                              {p.comment}
+                            </span>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="flex-1 truncate text-xs text-[var(--muted-foreground)]">Unknown persona</span>
+                    );
+                  })()}
+                  <button
+                    onClick={() => updateChat.mutate({ id: chat.id, personaId: null })}
+                    className="ml-auto shrink-0 rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                    title="Remove persona"
+                  >
+                    <X size="0.75rem" />
+                  </button>
+                </div>
+              ) : (
+                <p className="text-[0.6875rem] text-[var(--muted-foreground)]">No persona selected.</p>
+              )}
+
+              {/* Persona picker */}
+              {!showPersonaPicker ? (
+                <button
+                  onClick={() => {
+                    setShowPersonaPicker(true);
+                    setPersonaSearch("");
+                  }}
+                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+                >
+                  <Plus size="0.75rem" /> {chat.personaId ? "Change" : "Choose"} Persona
+                </button>
+              ) : (
+                <PickerDropdown
+                  search={personaSearch}
+                  onSearchChange={setPersonaSearch}
+                  onClose={() => setShowPersonaPicker(false)}
+                  placeholder="Search personas..."
+                >
+                  {/* None option */}
+                  <button
+                    onClick={() => {
+                      updateChat.mutate({ id: chat.id, personaId: null });
+                      setShowPersonaPicker(false);
+                    }}
+                    className={cn(
+                      "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]",
+                      !chat.personaId && "bg-[var(--primary)]/10",
+                    )}
+                  >
+                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--muted-foreground)]">
+                      <X size="0.625rem" />
+                    </div>
+                    <span className="flex-1 truncate text-xs">None</span>
+                    {!chat.personaId && <Check size="0.625rem" className="ml-auto shrink-0 text-[var(--primary)]" />}
+                  </button>
+                  {personas
+                    .filter(
+                      (p) =>
+                        p.name.toLowerCase().includes(personaSearch.toLowerCase()) ||
+                        (p.comment && p.comment.toLowerCase().includes(personaSearch.toLowerCase())),
+                    )
+                    .map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => {
+                          updateChat.mutate({ id: chat.id, personaId: p.id });
+                          setShowPersonaPicker(false);
+                        }}
+                        className={cn(
+                          "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]",
+                          chat.personaId === p.id && "bg-[var(--primary)]/10",
+                        )}
+                      >
+                        {p.avatarPath ? (
+                          <img
+                            src={p.avatarPath}
+                            alt={p.name}
+                            loading="lazy"
+                            className="h-6 w-6 shrink-0 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
+                            <User size="0.625rem" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <span className="block truncate text-xs">{p.name}</span>
+                          {p.comment && (
+                            <span className="block truncate text-[0.625rem] italic text-[var(--muted-foreground)]">
+                              {p.comment}
+                            </span>
+                          )}
+                        </div>
+                        {chat.personaId === p.id && (
+                          <Check size="0.625rem" className="ml-auto shrink-0 text-[var(--primary)]" />
+                        )}
+                      </button>
+                    ))}
+                  {personas.filter(
                     (p) =>
                       p.name.toLowerCase().includes(personaSearch.toLowerCase()) ||
                       (p.comment && p.comment.toLowerCase().includes(personaSearch.toLowerCase())),
-                  )
-                  .map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => {
-                        updateChat.mutate({ id: chat.id, personaId: p.id });
-                        setShowPersonaPicker(false);
-                      }}
-                      className={cn(
-                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]",
-                        chat.personaId === p.id && "bg-[var(--primary)]/10",
-                      )}
-                    >
-                      {p.avatarPath ? (
-                        <img
-                          src={p.avatarPath}
-                          alt={p.name}
-                          loading="lazy"
-                          className="h-6 w-6 shrink-0 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white">
-                          <User size="0.625rem" />
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <span className="block truncate text-xs">{p.name}</span>
-                        {p.comment && (
-                          <span className="block truncate text-[0.625rem] italic text-[var(--muted-foreground)]">
-                            {p.comment}
-                          </span>
-                        )}
-                      </div>
-                      {chat.personaId === p.id && (
-                        <Check size="0.625rem" className="ml-auto shrink-0 text-[var(--primary)]" />
-                      )}
-                    </button>
-                  ))}
-                {personas.filter(
-                  (p) =>
-                    p.name.toLowerCase().includes(personaSearch.toLowerCase()) ||
-                    (p.comment && p.comment.toLowerCase().includes(personaSearch.toLowerCase())),
-                ).length === 0 && (
-                  <p className="px-3 py-2 text-[0.6875rem] text-[var(--muted-foreground)]">
-                    {personas.length === 0 ? "No personas created yet." : "No matches."}
-                  </p>
-                )}
-              </PickerDropdown>
-            )}
-          </Section>
+                  ).length === 0 && (
+                    <p className="px-3 py-2 text-[0.6875rem] text-[var(--muted-foreground)]">
+                      {personas.length === 0 ? "No personas created yet." : "No matches."}
+                    </p>
+                  )}
+                </PickerDropdown>
+              )}
+            </Section>
+          )}
 
           {/* Characters — only show added ones + add button */}
-          <Section
-            label="Characters"
-            icon={<Users size="0.875rem" />}
-            count={chatCharIds.length}
-            help="Characters in this chat. Each character has their own personality that the AI roleplays as."
-          >
-            {/* Active characters */}
-            {chatCharIds.length === 0 ? (
-              <p className="text-[0.6875rem] text-[var(--muted-foreground)]">No characters added to this chat.</p>
-            ) : (
-              <div
-                className="flex flex-col gap-1"
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDropIdx(chatCharIds.length);
-                }}
-                onDrop={handleCharDrop}
-              >
-                {chatCharIds.map((cid, i) => {
-                  const c = characters.find((ch) => ch.id === cid);
-                  if (!c) return null;
-                  const name = charName(c);
-                  const spriteActive = spriteCharacterIds.includes(c.id);
-                  return (
-                    <div key={c.id}>
-                      {dropIdx === i && dragIdx !== null && dragIdx !== i && (
-                        <div className="h-0.5 rounded-full bg-[var(--primary)] mx-2 mb-1" />
+          {!isGame && (
+            <Section
+              label="Characters"
+              icon={<Users size="0.875rem" />}
+              count={chatCharIds.length}
+              help="Characters in this chat. Each character has their own personality that the AI roleplays as."
+            >
+              {/* Active characters */}
+              {chatCharIds.length === 0 ? (
+                <p className="text-[0.6875rem] text-[var(--muted-foreground)]">No characters added to this chat.</p>
+              ) : (
+                <div
+                  className="flex flex-col gap-1"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDropIdx(chatCharIds.length);
+                  }}
+                  onDrop={handleCharDrop}
+                >
+                  {chatCharIds.map((cid, i) => {
+                    const c = characters.find((ch) => ch.id === cid);
+                    if (!c) return null;
+                    const name = charName(c);
+                    const spriteActive = spriteCharacterIds.includes(c.id);
+                    return (
+                      <div key={c.id}>
+                        {dropIdx === i && dragIdx !== null && dragIdx !== i && (
+                          <div className="h-0.5 rounded-full bg-[var(--primary)] mx-2 mb-1" />
+                        )}
+                        <div
+                          draggable
+                          onDragStart={(e) => handleCharDragStart(i, e)}
+                          onDragOver={(e) => {
+                            e.stopPropagation();
+                            handleCharDragOver(i, e);
+                          }}
+                          onDragEnd={handleCharDragEnd}
+                          className={cn(
+                            "flex items-center gap-2 rounded-lg bg-[var(--primary)]/10 px-2 py-2 ring-1 ring-[var(--primary)]/30 transition-opacity",
+                            dragIdx === i && "opacity-40",
+                          )}
+                        >
+                          <div
+                            className="cursor-grab text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors active:cursor-grabbing"
+                            title="Drag to reorder"
+                          >
+                            <GripVertical size="0.75rem" />
+                          </div>
+                          <button
+                            onClick={() => {
+                              onClose();
+                              useUIStore.getState().openCharacterDetail(c.id);
+                            }}
+                            className="flex items-center gap-2.5 min-w-0 flex-1 text-left transition-colors hover:opacity-80"
+                            title="Open character card"
+                          >
+                            {c.avatarPath ? (
+                              <img
+                                src={c.avatarPath}
+                                alt={name}
+                                loading="lazy"
+                                className="h-7 w-7 rounded-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent)] text-[0.625rem] font-bold">
+                                {name[0]}
+                              </div>
+                            )}
+                            <span className="flex-1 truncate text-xs">{name}</span>
+                          </button>
+                          <SpriteToggleButton
+                            characterId={c.id}
+                            active={spriteActive}
+                            disabled={!spriteActive && spriteCharacterIds.length >= 3}
+                            onToggle={() => toggleSprite(c.id)}
+                          />
+                          <button
+                            onClick={() => toggleCharacter(c.id)}
+                            className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
+                            title="Remove from chat"
+                          >
+                            <Trash2 size="0.6875rem" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {dropIdx === chatCharIds.length && dragIdx !== null && (
+                    <div className="h-0.5 rounded-full bg-[var(--primary)] mx-2 mt-1" />
+                  )}
+                </div>
+              )}
+
+              {/* Sprite layout — only show if any sprites enabled */}
+              {spriteCharacterIds.length > 0 && (
+                <div className="mt-2 rounded-lg bg-[var(--secondary)] px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <Image size="0.75rem" className="text-[var(--muted-foreground)]" />
+                    <span className="flex-1 text-[0.6875rem] text-[var(--muted-foreground)]">Sprite Layout</span>
+                    <button
+                      onClick={() => onToggleSpriteArrange?.()}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-[0.625rem] font-medium transition-colors ring-1 ring-[var(--border)]",
+                        spriteArrangeMode
+                          ? "bg-[var(--primary)] text-white"
+                          : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
                       )}
-                      <div
-                        draggable
-                        onDragStart={(e) => handleCharDragStart(i, e)}
-                        onDragOver={(e) => {
-                          e.stopPropagation();
-                          handleCharDragOver(i, e);
-                        }}
-                        onDragEnd={handleCharDragEnd}
+                    >
+                      {spriteArrangeMode ? "Done" : "Arrange"}
+                    </button>
+                    <button
+                      onClick={resetSpritePlacements}
+                      disabled={!hasCustomSpritePlacements}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-[0.625rem] font-medium transition-colors ring-1 ring-[var(--border)]",
+                        hasCustomSpritePlacements
+                          ? "text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+                          : "cursor-not-allowed opacity-40 text-[var(--muted-foreground)]",
+                      )}
+                    >
+                      Reset
+                    </button>
+                  </div>
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Default Side</span>
+                    <div className="flex rounded-md ring-1 ring-[var(--border)]">
+                      <button
+                        onClick={() => setSpriteSide("left")}
                         className={cn(
-                          "flex items-center gap-2 rounded-lg bg-[var(--primary)]/10 px-2 py-2 ring-1 ring-[var(--primary)]/30 transition-opacity",
-                          dragIdx === i && "opacity-40",
+                          "px-2.5 py-1 text-[0.625rem] font-medium transition-colors rounded-l-md",
+                          spritePosition === "left"
+                            ? "bg-[var(--primary)] text-white"
+                            : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
                         )}
                       >
-                        <div
-                          className="cursor-grab text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors active:cursor-grabbing"
-                          title="Drag to reorder"
-                        >
-                          <GripVertical size="0.75rem" />
-                        </div>
+                        Left
+                      </button>
+                      <button
+                        onClick={() => setSpriteSide("right")}
+                        className={cn(
+                          "px-2.5 py-1 text-[0.625rem] font-medium transition-colors rounded-r-md",
+                          spritePosition === "right"
+                            ? "bg-[var(--primary)] text-white"
+                            : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
+                        )}
+                      >
+                        Right
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="mt-2 text-[0.5625rem] leading-relaxed text-[var(--muted-foreground)]">
+                    Arrange mode lets you drag sprites anywhere in the chat area. Reset clears saved positions. Changing
+                    the side flips the current layout.
+                  </p>
+                </div>
+              )}
+
+              {/* Add character picker */}
+              {!showCharPicker ? (
+                <button
+                  onClick={() => {
+                    setShowCharPicker(true);
+                    setCharSearch("");
+                  }}
+                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+                >
+                  <Plus size="0.75rem" /> Add Character
+                </button>
+              ) : (
+                <PickerDropdown
+                  search={charSearch}
+                  onSearchChange={setCharSearch}
+                  onClose={() => setShowCharPicker(false)}
+                  placeholder="Search characters…"
+                >
+                  {characters
+                    .filter((c) => !chatCharIds.includes(c.id))
+                    .filter((c) => charName(c).toLowerCase().includes(charSearch.toLowerCase()))
+                    .map((c) => {
+                      const name = charName(c);
+                      return (
                         <button
+                          key={c.id}
                           onClick={() => {
-                            onClose();
-                            useUIStore.getState().openCharacterDetail(c.id);
+                            toggleCharacter(c.id);
+                            setShowCharPicker(false);
                           }}
-                          className="flex items-center gap-2.5 min-w-0 flex-1 text-left transition-colors hover:opacity-80"
-                          title="Open character card"
+                          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]"
                         >
                           {c.avatarPath ? (
-                            <img
-                              src={c.avatarPath}
-                              alt={name}
-                              loading="lazy"
-                              className="h-7 w-7 rounded-full object-cover"
-                            />
+                            <img src={c.avatarPath} alt={name} className="h-6 w-6 rounded-full object-cover" />
                           ) : (
-                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent)] text-[0.625rem] font-bold">
+                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[0.5625rem] font-bold">
                               {name[0]}
                             </div>
                           )}
                           <span className="flex-1 truncate text-xs">{name}</span>
+                          <Plus size="0.75rem" className="text-[var(--muted-foreground)]" />
                         </button>
-                        <SpriteToggleButton
-                          characterId={c.id}
-                          active={spriteActive}
-                          disabled={!spriteActive && spriteCharacterIds.length >= 3}
-                          onToggle={() => toggleSprite(c.id)}
-                        />
-                        <button
-                          onClick={() => toggleCharacter(c.id)}
-                          className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
-                          title="Remove from chat"
-                        >
-                          <Trash2 size="0.6875rem" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-                {dropIdx === chatCharIds.length && dragIdx !== null && (
-                  <div className="h-0.5 rounded-full bg-[var(--primary)] mx-2 mt-1" />
-                )}
-              </div>
-            )}
-
-            {/* Sprite layout — only show if any sprites enabled */}
-            {spriteCharacterIds.length > 0 && (
-              <div className="mt-2 rounded-lg bg-[var(--secondary)] px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <Image size="0.75rem" className="text-[var(--muted-foreground)]" />
-                  <span className="flex-1 text-[0.6875rem] text-[var(--muted-foreground)]">Sprite Layout</span>
-                  <button
-                    onClick={() => onToggleSpriteArrange?.()}
-                    className={cn(
-                      "rounded-md px-2.5 py-1 text-[0.625rem] font-medium transition-colors ring-1 ring-[var(--border)]",
-                      spriteArrangeMode
-                        ? "bg-[var(--primary)] text-white"
-                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
-                    )}
-                  >
-                    {spriteArrangeMode ? "Done" : "Arrange"}
-                  </button>
-                  <button
-                    onClick={resetSpritePlacements}
-                    disabled={!hasCustomSpritePlacements}
-                    className={cn(
-                      "rounded-md px-2.5 py-1 text-[0.625rem] font-medium transition-colors ring-1 ring-[var(--border)]",
-                      hasCustomSpritePlacements
-                        ? "text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
-                        : "cursor-not-allowed opacity-40 text-[var(--muted-foreground)]",
-                    )}
-                  >
-                    Reset
-                  </button>
-                </div>
-
-                <div className="mt-2 flex items-center gap-2">
-                  <span className="text-[0.625rem] font-medium text-[var(--muted-foreground)]">Default Side</span>
-                  <div className="flex rounded-md ring-1 ring-[var(--border)]">
-                    <button
-                      onClick={() => setSpriteSide("left")}
-                      className={cn(
-                        "px-2.5 py-1 text-[0.625rem] font-medium transition-colors rounded-l-md",
-                        spritePosition === "left"
-                          ? "bg-[var(--primary)] text-white"
-                          : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
-                      )}
-                    >
-                      Left
-                    </button>
-                    <button
-                      onClick={() => setSpriteSide("right")}
-                      className={cn(
-                        "px-2.5 py-1 text-[0.625rem] font-medium transition-colors rounded-r-md",
-                        spritePosition === "right"
-                          ? "bg-[var(--primary)] text-white"
-                          : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]",
-                      )}
-                    >
-                      Right
-                    </button>
-                  </div>
-                </div>
-
-                <p className="mt-2 text-[0.5625rem] leading-relaxed text-[var(--muted-foreground)]">
-                  Arrange mode lets you drag sprites anywhere in the chat area. Reset clears saved positions. Changing
-                  the side flips the current layout.
-                </p>
-              </div>
-            )}
-
-            {/* Add character picker */}
-            {!showCharPicker ? (
-              <button
-                onClick={() => {
-                  setShowCharPicker(true);
-                  setCharSearch("");
-                }}
-                className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
-              >
-                <Plus size="0.75rem" /> Add Character
-              </button>
-            ) : (
-              <PickerDropdown
-                search={charSearch}
-                onSearchChange={setCharSearch}
-                onClose={() => setShowCharPicker(false)}
-                placeholder="Search characters…"
-              >
-                {characters
-                  .filter((c) => !chatCharIds.includes(c.id))
-                  .filter((c) => charName(c).toLowerCase().includes(charSearch.toLowerCase()))
-                  .map((c) => {
-                    const name = charName(c);
-                    return (
-                      <button
-                        key={c.id}
-                        onClick={() => {
-                          toggleCharacter(c.id);
-                          setShowCharPicker(false);
-                        }}
-                        className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]"
-                      >
-                        {c.avatarPath ? (
-                          <img src={c.avatarPath} alt={name} className="h-6 w-6 rounded-full object-cover" />
-                        ) : (
-                          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[0.5625rem] font-bold">
-                            {name[0]}
-                          </div>
-                        )}
-                        <span className="flex-1 truncate text-xs">{name}</span>
-                        <Plus size="0.75rem" className="text-[var(--muted-foreground)]" />
-                      </button>
-                    );
-                  })}
-                {characters
-                  .filter((c) => !chatCharIds.includes(c.id))
-                  .filter((c) => charName(c).toLowerCase().includes(charSearch.toLowerCase())).length === 0 && (
-                  <p className="px-3 py-2 text-[0.6875rem] text-[var(--muted-foreground)]">
-                    {characters.filter((c) => !chatCharIds.includes(c.id)).length === 0
-                      ? "All characters already added."
-                      : "No matches."}
-                  </p>
-                )}
-              </PickerDropdown>
-            )}
-
-            {/* Add from Group picker */}
-            {((characterGroups ?? []) as CharacterGroup[]).length > 0 &&
-              (!showGroupPicker ? (
-                <button
-                  onClick={() => setShowGroupPicker(true)}
-                  className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
-                >
-                  <Users size="0.75rem" /> Add from Group
-                </button>
-              ) : (
-                <PickerDropdown
-                  search=""
-                  onSearchChange={() => {}}
-                  onClose={() => setShowGroupPicker(false)}
-                  placeholder="Select a group…"
-                >
-                  {((characterGroups ?? []) as CharacterGroup[]).map((group) => {
-                    const rawIds = group.characterIds ?? [];
-                    const groupCharIds: string[] = Array.isArray(rawIds)
-                      ? rawIds
-                      : typeof rawIds === "string"
-                        ? JSON.parse(rawIds)
-                        : [];
-                    const newIds = groupCharIds.filter((id) => !chatCharIds.includes(id));
-                    return (
-                      <button
-                        key={group.id}
-                        onClick={() => {
-                          if (newIds.length > 0) {
-                            updateChat.mutate({ id: chat.id, characterIds: [...chatCharIds, ...newIds] });
-                          }
-                          setShowGroupPicker(false);
-                        }}
-                        className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]"
-                      >
-                        {group.avatarPath ? (
-                          <img
-                            src={group.avatarPath}
-                            alt={group.name}
-                            loading="lazy"
-                            className="h-6 w-6 rounded-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[0.5625rem] font-bold">
-                            {group.name[0]}
-                          </div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <span className="block truncate text-xs">{group.name}</span>
-                          <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
-                            {groupCharIds.length} characters
-                            {newIds.length > 0 ? ` (· ${newIds.length} new)` : " (all added)"}
-                          </span>
-                        </div>
-                        {newIds.length > 0 && <Plus size="0.75rem" className="text-[var(--muted-foreground)]" />}
-                      </button>
-                    );
-                  })}
+                      );
+                    })}
+                  {characters
+                    .filter((c) => !chatCharIds.includes(c.id))
+                    .filter((c) => charName(c).toLowerCase().includes(charSearch.toLowerCase())).length === 0 && (
+                    <p className="px-3 py-2 text-[0.6875rem] text-[var(--muted-foreground)]">
+                      {characters.filter((c) => !chatCharIds.includes(c.id)).length === 0
+                        ? "All characters already added."
+                        : "No matches."}
+                    </p>
+                  )}
                 </PickerDropdown>
-              ))}
-          </Section>
+              )}
 
-          {/* Group Chat Settings — only when 2+ characters, roleplay only (conversations always use merged) */}
-          {chatCharIds.length > 1 && !isConversation && (
+              {/* Add from Group picker */}
+              {((characterGroups ?? []) as CharacterGroup[]).length > 0 &&
+                (!showGroupPicker ? (
+                  <button
+                    onClick={() => setShowGroupPicker(true)}
+                    className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+                  >
+                    <Users size="0.75rem" /> Add from Group
+                  </button>
+                ) : (
+                  <PickerDropdown
+                    search=""
+                    onSearchChange={() => {}}
+                    onClose={() => setShowGroupPicker(false)}
+                    placeholder="Select a group…"
+                  >
+                    {((characterGroups ?? []) as CharacterGroup[]).map((group) => {
+                      const rawIds = group.characterIds ?? [];
+                      const groupCharIds: string[] = Array.isArray(rawIds)
+                        ? rawIds
+                        : typeof rawIds === "string"
+                          ? JSON.parse(rawIds)
+                          : [];
+                      const newIds = groupCharIds.filter((id) => !chatCharIds.includes(id));
+                      return (
+                        <button
+                          key={group.id}
+                          onClick={() => {
+                            if (newIds.length > 0) {
+                              updateChat.mutate({ id: chat.id, characterIds: [...chatCharIds, ...newIds] });
+                            }
+                            setShowGroupPicker(false);
+                          }}
+                          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]"
+                        >
+                          {group.avatarPath ? (
+                            <img
+                              src={group.avatarPath}
+                              alt={group.name}
+                              loading="lazy"
+                              className="h-6 w-6 rounded-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[0.5625rem] font-bold">
+                              {group.name[0]}
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <span className="block truncate text-xs">{group.name}</span>
+                            <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
+                              {groupCharIds.length} characters
+                              {newIds.length > 0 ? ` (· ${newIds.length} new)` : " (all added)"}
+                            </span>
+                          </div>
+                          {newIds.length > 0 && <Plus size="0.75rem" className="text-[var(--muted-foreground)]" />}
+                        </button>
+                      );
+                    })}
+                  </PickerDropdown>
+                ))}
+            </Section>
+          )}
+
+          {/* Group Chat Settings — only when 2+ characters, roleplay only (conversations always use merged, game mode handles it internally) */}
+          {chatCharIds.length > 1 && !isConversation && !isGame && (
             <Section
               label="Group Chat"
               icon={<Users size="0.875rem" />}
@@ -1422,13 +1891,13 @@ export function ChatSettingsDrawer({
                   search={connectionSearch}
                   onSearchChange={setConnectionSearch}
                   onClose={() => setShowConnectionPicker(false)}
-                  placeholder="Search roleplay chats…"
+                  placeholder="Search roleplay or game chats…"
                 >
                   {((allChats ?? []) as Chat[])
                     .filter(
                       (c) =>
                         c.id !== chat.id &&
-                        c.mode === "roleplay" &&
+                        (c.mode === "roleplay" || c.mode === "game") &&
                         !c.connectedChatId &&
                         c.name.toLowerCase().includes(connectionSearch.toLowerCase()),
                     )
@@ -1450,12 +1919,12 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          {/* Connected Conversation — roleplay mode: show linked OOC chat */}
+          {/* Connected Conversation — roleplay/game mode: show linked OOC chat */}
           {!isConversation && chat.connectedChatId && (
             <Section
               label="Connected Conversation"
               icon={<ArrowRightLeft size="0.875rem" />}
-              help="This roleplay is linked to a conversation chat. OOC influences from that chat will be injected into this roleplay's context."
+              help="This chat is linked to a conversation. OOC influences from that chat will be injected into context, and game events or roleplay moments can flow back."
             >
               {(() => {
                 const linked = (allChats ?? []).find((c: Chat) => c.id === chat.connectedChatId);
@@ -1476,6 +1945,56 @@ export function ChatSettingsDrawer({
                   </div>
                 );
               })()}
+            </Section>
+          )}
+
+          {/* Connect to Conversation — game mode without existing link */}
+          {chatMode === "game" && !chat.connectedChatId && (
+            <Section
+              label="Connected Conversation"
+              icon={<ArrowRightLeft size="0.875rem" />}
+              help="Link this game to an OOC conversation. Game events can flow to the conversation and player discussions can influence the game."
+            >
+              {!showConnectionPicker ? (
+                <button
+                  onClick={() => {
+                    setShowConnectionPicker(true);
+                    setConnectionSearch("");
+                  }}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+                >
+                  <Plus size="0.75rem" /> Link to Conversation
+                </button>
+              ) : (
+                <PickerDropdown
+                  search={connectionSearch}
+                  onSearchChange={setConnectionSearch}
+                  onClose={() => setShowConnectionPicker(false)}
+                  placeholder="Search conversation chats…"
+                >
+                  {((allChats ?? []) as Chat[])
+                    .filter(
+                      (c) =>
+                        c.id !== chat.id &&
+                        c.mode === "conversation" &&
+                        !c.connectedChatId &&
+                        c.name.toLowerCase().includes(connectionSearch.toLowerCase()),
+                    )
+                    .map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => {
+                          connectChat.mutate({ chatId: chat.id, targetChatId: c.id });
+                          setShowConnectionPicker(false);
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--accent)]"
+                      >
+                        <MessageSquare size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
+                        <span className="truncate">{c.name}</span>
+                      </button>
+                    ))}
+                </PickerDropdown>
+              )}
             </Section>
           )}
 
@@ -1586,10 +2105,28 @@ export function ChatSettingsDrawer({
                   )}
                 >
                   <div className="flex-1 min-w-0">
-                    <span className="text-xs font-medium">Enable Agents</span>
+                    <span className="text-xs font-medium">{isGame ? "Enable Scene Analysis" : "Enable Agents"}</span>
                     <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                      Run AI agents during generation (world state, expressions, etc.)
+                      {isGame
+                        ? "Analyse scenes for backgrounds, music, effects, and expressions after each GM turn"
+                        : "Run AI agents during generation (world state, expressions, etc.)"}
                     </p>
+                    {isGame &&
+                      metadata.enableAgents &&
+                      (() => {
+                        const setupCfg = metadata.gameSetupConfig as Record<string, unknown> | undefined;
+                        const sceneConnId =
+                          (metadata.gameSceneConnectionId as string) || (setupCfg?.sceneConnectionId as string) || null;
+                        const sceneConn = sceneConnId
+                          ? ((connections ?? []) as Array<{ id: string; name: string; model?: string }>).find(
+                              (c) => c.id === sceneConnId,
+                            )
+                          : null;
+                        const label = sceneConn
+                          ? `${sceneConn.name}${sceneConn.model ? ` — ${sceneConn.model}` : ""}`
+                          : "Local sidecar (Gemma)";
+                        return <p className="mt-0.5 text-[0.55rem] text-[var(--primary)]/70">{label}</p>;
+                      })()}
                   </div>
                   <div
                     className={cn(
@@ -1605,14 +2142,35 @@ export function ChatSettingsDrawer({
                     />
                   </div>
                 </button>
+                {isGame && metadata.enableAgents && (
+                  <div className="mt-1.5 px-3">
+                    <select
+                      value={(metadata.gameSceneConnectionId as string) ?? ""}
+                      onChange={(e) =>
+                        updateMeta.mutate({ id: chat.id, gameSceneConnectionId: e.target.value || null })
+                      }
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)]"
+                    >
+                      <option value="">Local sidecar (Gemma)</option>
+                      {((connections ?? []) as Array<{ id: string; name: string; model?: string }>)
+                        .filter((c) => (c as { provider?: string }).provider !== "image_generation")
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                            {c.model ? ` — ${c.model}` : ""}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
                 <p className="text-[0.625rem] text-[var(--muted-foreground)] px-1">
                   {metadata.enableAgents
                     ? "If enabled, this chat can use workspace default agents or any agents you add below."
                     : "If disabled, no agents (workspace default or per-chat) will run for this chat."}
                 </p>
 
-                {/* Manual trackers toggle */}
-                {metadata.enableAgents && (
+                {/* Manual trackers toggle — not for game mode */}
+                {metadata.enableAgents && !isGame && (
                   <button
                     onClick={() => updateMeta.mutate({ id: chat.id, manualTrackers: !metadata.manualTrackers })}
                     className={cn(
@@ -1646,8 +2204,8 @@ export function ChatSettingsDrawer({
                   </button>
                 )}
 
-                {/* Love Toys Control — inside Agents, visible when agents enabled */}
-                {metadata.enableAgents && (
+                {/* Love Toys Control — not for game mode */}
+                {metadata.enableAgents && !isGame && (
                   <div className="space-y-1.5">
                     <button
                       onClick={() => {
@@ -1686,170 +2244,287 @@ export function ChatSettingsDrawer({
                   </div>
                 )}
 
+                {/* Image Generation — game mode only */}
+                {isGame && (
+                  <div>
+                    <button
+                      onClick={() =>
+                        updateMeta.mutate({ id: chat.id, enableSpriteGeneration: !metadata.enableSpriteGeneration })
+                      }
+                      className={cn(
+                        "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-all",
+                        metadata.enableSpriteGeneration
+                          ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30"
+                          : "bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                      )}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[0.6875rem] font-medium flex items-center gap-1.5">
+                          <Image size="0.75rem" /> Image Generation
+                        </span>
+                        <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                          Auto-generate NPC portraits and location backgrounds during gameplay
+                        </p>
+                      </div>
+                      <div
+                        className={cn(
+                          "h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                          metadata.enableSpriteGeneration ? "bg-[var(--primary)]" : "bg-[var(--muted-foreground)]/50",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                            metadata.enableSpriteGeneration && "translate-x-3.5",
+                          )}
+                        />
+                      </div>
+                    </button>
+                    {metadata.enableSpriteGeneration && (
+                      <div className="mt-1.5 px-3">
+                        <select
+                          value={(metadata.gameImageConnectionId as string) ?? ""}
+                          onChange={(e) =>
+                            updateMeta.mutate({ id: chat.id, gameImageConnectionId: e.target.value || null })
+                          }
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)]"
+                        >
+                          <option value="">Select image connection…</option>
+                          {(imageConnectionsList ?? []).map((c: { id: string; name: string; model?: string }) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                              {c.model ? ` — ${c.model}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Categorized agent sub-sections */}
                 {metadata.enableAgents && (
                   <>
-                    {activeAgentIds.length === 0 && (
-                      <p className="text-[0.6875rem] text-[var(--muted-foreground)] px-1">
-                        No per-chat agent overrides. Workspace default agents will be used for this chat.
-                      </p>
+                    {isGame ? (
+                      <div className="space-y-1">
+                        <p className="text-[0.625rem] text-[var(--muted-foreground)] px-1">
+                          Toggle agents for this game session. Add or remove agents from the main Agents page.
+                        </p>
+                        {gameAgentPool.map((agentId) => {
+                          const agent =
+                            availableAgents.find((a) => a.id === agentId) ??
+                            ({ id: agentId, name: agentId, description: "", category: "misc" } as const);
+                          const active = activeAgentIds.includes(agentId);
+                          return (
+                            <button
+                              key={agentId}
+                              onClick={() => {
+                                if (active) {
+                                  updateMeta.mutate({
+                                    id: chat.id,
+                                    activeAgentIds: activeAgentIds.filter((id) => id !== agentId),
+                                  });
+                                } else {
+                                  updateMeta.mutate({ id: chat.id, activeAgentIds: [...activeAgentIds, agentId] });
+                                }
+                              }}
+                              className={cn(
+                                "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-all",
+                                active
+                                  ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30"
+                                  : "bg-[var(--secondary)] hover:bg-[var(--accent)]",
+                              )}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <span className="block truncate text-xs font-medium">{agent.name}</span>
+                                {agent.description ? (
+                                  <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
+                                    {agent.description}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div
+                                className={cn(
+                                  "h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                                  active ? "bg-[var(--primary)]" : "bg-[var(--muted-foreground)]/50",
+                                )}
+                              >
+                                <div
+                                  className={cn(
+                                    "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                                    active && "translate-x-3.5",
+                                  )}
+                                />
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <>
+                        {activeAgentIds.length === 0 && (
+                          <p className="text-[0.6875rem] text-[var(--muted-foreground)] px-1">
+                            No per-chat agent overrides. Workspace default agents will be used for this chat.
+                          </p>
+                        )}
+
+                        {/* Agent category sub-sections */}
+                        {(
+                          [
+                            {
+                              key: "writer",
+                              label: "Writer Agents",
+                              icon: <Feather size="0.75rem" />,
+                              description:
+                                "Improve prose quality, maintain continuity, and shape the narrative direction of your roleplay.",
+                            },
+                            {
+                              key: "tracker",
+                              label: "Tracker Agents",
+                              icon: <Activity size="0.75rem" />,
+                              description:
+                                "Automatically track world state, character stats, quests, expressions, and other data that changes over time.",
+                            },
+                            {
+                              key: "misc",
+                              label: "Misc Agents",
+                              icon: <Puzzle size="0.75rem" />,
+                              description:
+                                "Specialized utilities — image generation, combat systems, music, summaries, and other extras.",
+                            },
+                          ] as const
+                        ).map((cat) => {
+                          const catAgents = availableAgents.filter((a) => a.category === cat.key);
+                          const activeInCat = catAgents.filter((a) => activeAgentIds.includes(a.id));
+                          const inactiveInCat = catAgents.filter((a) => !activeAgentIds.includes(a.id));
+                          if (catAgents.length === 0) return null;
+                          return (
+                            <AgentCategorySection
+                              key={cat.key}
+                              label={cat.label}
+                              icon={cat.icon}
+                              description={cat.description}
+                              count={activeInCat.length}
+                            >
+                              {/* Active agents in this category */}
+                              {activeInCat.length > 0 && (
+                                <div className="flex flex-col gap-1 mb-1.5">
+                                  {activeInCat.map((agent) => (
+                                    <div
+                                      key={agent.id}
+                                      className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
+                                    >
+                                      <Sparkles size="0.875rem" className="text-[var(--primary)]" />
+                                      <div className="flex-1 min-w-0">
+                                        <span className="block truncate text-xs">{agent.name}</span>
+                                        <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
+                                          {agent.description}
+                                        </span>
+                                      </div>
+                                      <button
+                                        onClick={() => toggleAgent(agent.id)}
+                                        className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
+                                        title="Remove from chat"
+                                      >
+                                        <Trash2 size="0.6875rem" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {/* Available agents to add */}
+                              {inactiveInCat.length > 0 ? (
+                                <div className="flex flex-col gap-1">
+                                  {inactiveInCat.map((agent) => (
+                                    <button
+                                      key={agent.id}
+                                      onClick={() => {
+                                        const next = [...activeAgentIds, agent.id];
+                                        updateMeta.mutate({ id: chat.id, activeAgentIds: next });
+                                      }}
+                                      className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)] bg-[var(--secondary)]"
+                                    >
+                                      <Plus size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
+                                      <div className="flex-1 min-w-0">
+                                        <span className="block truncate text-xs">{agent.name}</span>
+                                        <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
+                                          {agent.description}
+                                        </span>
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-[0.625rem] text-[var(--muted-foreground)] px-1">
+                                  All agents in this category are active.
+                                </p>
+                              )}
+                            </AgentCategorySection>
+                          );
+                        })}
+
+                        {/* Custom agents */}
+                        {(() => {
+                          const customAgents = availableAgents.filter((a) => a.category === "custom");
+                          if (customAgents.length === 0) return null;
+                          const activeCustom = customAgents.filter((a) => activeAgentIds.includes(a.id));
+                          const inactiveCustom = customAgents.filter((a) => !activeAgentIds.includes(a.id));
+                          return (
+                            <AgentCategorySection
+                              label="Custom Agents"
+                              icon={<Settings2 size="0.75rem" />}
+                              description="Your custom-created agents."
+                              count={activeCustom.length}
+                            >
+                              {activeCustom.length > 0 && (
+                                <div className="flex flex-col gap-1 mb-1.5">
+                                  {activeCustom.map((agent) => (
+                                    <div
+                                      key={agent.id}
+                                      className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
+                                    >
+                                      <Sparkles size="0.875rem" className="text-[var(--primary)]" />
+                                      <div className="flex-1 min-w-0">
+                                        <span className="block truncate text-xs">{agent.name}</span>
+                                      </div>
+                                      <button
+                                        onClick={() => toggleAgent(agent.id)}
+                                        className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
+                                        title="Remove from chat"
+                                      >
+                                        <Trash2 size="0.6875rem" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {inactiveCustom.length > 0 && (
+                                <div className="flex flex-col gap-1">
+                                  {inactiveCustom.map((agent) => (
+                                    <button
+                                      key={agent.id}
+                                      onClick={() => {
+                                        const next = [...activeAgentIds, agent.id];
+                                        updateMeta.mutate({ id: chat.id, activeAgentIds: next });
+                                      }}
+                                      className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)] bg-[var(--secondary)]"
+                                    >
+                                      <Plus size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
+                                      <div className="flex-1 min-w-0">
+                                        <span className="block truncate text-xs">{agent.name}</span>
+                                        <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
+                                          {agent.description}
+                                        </span>
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </AgentCategorySection>
+                          );
+                        })()}
+                      </>
                     )}
-
-                    {/* Agent category sub-sections */}
-                    {(
-                      [
-                        {
-                          key: "writer",
-                          label: "Writer Agents",
-                          icon: <Feather size="0.75rem" />,
-                          description:
-                            "Improve prose quality, maintain continuity, and shape the narrative direction of your roleplay.",
-                        },
-                        {
-                          key: "tracker",
-                          label: "Tracker Agents",
-                          icon: <Activity size="0.75rem" />,
-                          description:
-                            "Automatically track world state, character stats, quests, expressions, and other data that changes over time.",
-                        },
-                        {
-                          key: "misc",
-                          label: "Misc Agents",
-                          icon: <Puzzle size="0.75rem" />,
-                          description:
-                            "Specialized utilities — image generation, combat systems, music, summaries, and other extras.",
-                        },
-                      ] as const
-                    ).map((cat) => {
-                      const catAgents = availableAgents.filter((a) => a.category === cat.key);
-                      const activeInCat = catAgents.filter((a) => activeAgentIds.includes(a.id));
-                      const inactiveInCat = catAgents.filter((a) => !activeAgentIds.includes(a.id));
-                      if (catAgents.length === 0) return null;
-                      return (
-                        <AgentCategorySection
-                          key={cat.key}
-                          label={cat.label}
-                          icon={cat.icon}
-                          description={cat.description}
-                          count={activeInCat.length}
-                        >
-                          {/* Active agents in this category */}
-                          {activeInCat.length > 0 && (
-                            <div className="flex flex-col gap-1 mb-1.5">
-                              {activeInCat.map((agent) => (
-                                <div
-                                  key={agent.id}
-                                  className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
-                                >
-                                  <Sparkles size="0.875rem" className="text-[var(--primary)]" />
-                                  <div className="flex-1 min-w-0">
-                                    <span className="block truncate text-xs">{agent.name}</span>
-                                    <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
-                                      {agent.description}
-                                    </span>
-                                  </div>
-                                  <button
-                                    onClick={() => toggleAgent(agent.id)}
-                                    className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
-                                    title="Remove from chat"
-                                  >
-                                    <Trash2 size="0.6875rem" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          {/* Available agents to add */}
-                          {inactiveInCat.length > 0 ? (
-                            <div className="flex flex-col gap-1">
-                              {inactiveInCat.map((agent) => (
-                                <button
-                                  key={agent.id}
-                                  onClick={() => {
-                                    const next = [...activeAgentIds, agent.id];
-                                    updateMeta.mutate({ id: chat.id, activeAgentIds: next });
-                                  }}
-                                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)] bg-[var(--secondary)]"
-                                >
-                                  <Plus size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
-                                  <div className="flex-1 min-w-0">
-                                    <span className="block truncate text-xs">{agent.name}</span>
-                                    <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
-                                      {agent.description}
-                                    </span>
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-[0.625rem] text-[var(--muted-foreground)] px-1">
-                              All agents in this category are active.
-                            </p>
-                          )}
-                        </AgentCategorySection>
-                      );
-                    })}
-
-                    {/* Custom agents */}
-                    {(() => {
-                      const customAgents = availableAgents.filter((a) => a.category === "custom");
-                      if (customAgents.length === 0) return null;
-                      const activeCustom = customAgents.filter((a) => activeAgentIds.includes(a.id));
-                      const inactiveCustom = customAgents.filter((a) => !activeAgentIds.includes(a.id));
-                      return (
-                        <AgentCategorySection
-                          label="Custom Agents"
-                          icon={<Settings2 size="0.75rem" />}
-                          description="Your custom-created agents."
-                          count={activeCustom.length}
-                        >
-                          {activeCustom.length > 0 && (
-                            <div className="flex flex-col gap-1 mb-1.5">
-                              {activeCustom.map((agent) => (
-                                <div
-                                  key={agent.id}
-                                  className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
-                                >
-                                  <Sparkles size="0.875rem" className="text-[var(--primary)]" />
-                                  <div className="flex-1 min-w-0">
-                                    <span className="block truncate text-xs">{agent.name}</span>
-                                  </div>
-                                  <button
-                                    onClick={() => toggleAgent(agent.id)}
-                                    className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
-                                    title="Remove from chat"
-                                  >
-                                    <Trash2 size="0.6875rem" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          {inactiveCustom.length > 0 && (
-                            <div className="flex flex-col gap-1">
-                              {inactiveCustom.map((agent) => (
-                                <button
-                                  key={agent.id}
-                                  onClick={() => {
-                                    const next = [...activeAgentIds, agent.id];
-                                    updateMeta.mutate({ id: chat.id, activeAgentIds: next });
-                                  }}
-                                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)] bg-[var(--secondary)]"
-                                >
-                                  <Plus size="0.75rem" className="shrink-0 text-[var(--muted-foreground)]" />
-                                  <div className="flex-1 min-w-0">
-                                    <span className="block truncate text-xs">{agent.name}</span>
-                                    <span className="block truncate text-[0.625rem] text-[var(--muted-foreground)]">
-                                      {agent.description}
-                                    </span>
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </AgentCategorySection>
-                      );
-                    })()}
                   </>
                 )}
               </div>
@@ -2331,6 +3006,8 @@ export function ChatSettingsDrawer({
             metadata={metadata}
             updateMeta={updateMeta}
             isConversation={isConversation}
+            connectionId={chat.connectionId ?? null}
+            connections={connections ?? []}
           />
 
           {/* Context Message Limit */}
@@ -2471,8 +3148,8 @@ const CHAT_PARAM_DEFAULTS: Required<ChatParameters> = {
   topK: 0,
   frequencyPenalty: 0,
   presencePenalty: 0,
-  reasoningEffort: null,
-  verbosity: null,
+  reasoningEffort: "maximum",
+  verbosity: "high",
 };
 
 const ROLEPLAY_PARAM_DEFAULTS: Required<ChatParameters> = {
@@ -2482,8 +3159,8 @@ const ROLEPLAY_PARAM_DEFAULTS: Required<ChatParameters> = {
   topK: 0,
   frequencyPenalty: 0,
   presencePenalty: 0,
-  reasoningEffort: null,
-  verbosity: null,
+  reasoningEffort: "maximum",
+  verbosity: "high",
 };
 
 const DEFAULT_CONVERSATION_PROMPT = `<role>
@@ -2508,13 +3185,32 @@ function AdvancedParametersSection({
   metadata,
   updateMeta,
   isConversation,
+  connectionId,
+  connections,
 }: {
   chat: Chat;
   metadata: Record<string, unknown>;
   updateMeta: ReturnType<typeof useUpdateChatMetadata>;
   isConversation: boolean;
+  connectionId: string | null;
+  connections: unknown[];
 }) {
-  const defaults = isConversation ? CHAT_PARAM_DEFAULTS : ROLEPLAY_PARAM_DEFAULTS;
+  const modeDefaults = isConversation ? CHAT_PARAM_DEFAULTS : ROLEPLAY_PARAM_DEFAULTS;
+  // Use connection-saved defaults if available, otherwise fall back to mode defaults
+  const conn = connectionId ? (connections as Record<string, unknown>[]).find((c) => c.id === connectionId) : null;
+  const connDefaultsRaw = conn?.defaultParameters
+    ? typeof conn.defaultParameters === "string"
+      ? (() => {
+          try {
+            return JSON.parse(conn.defaultParameters as string);
+          } catch {
+            return null;
+          }
+        })()
+      : conn.defaultParameters
+    : null;
+  const defaults: Required<ChatParameters> = connDefaultsRaw ? { ...modeDefaults, ...connDefaultsRaw } : modeDefaults;
+  const saveDefaults = useSaveConnectionDefaults();
   const [expanded, setExpanded] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
@@ -2637,7 +3333,7 @@ function AdvancedParametersSection({
               <div className="mt-1 flex gap-1.5">
                 {([null, "low", "medium", "high", "maximum"] as const).map((level) => (
                   <button
-                    key={level ?? "auto"}
+                    key={level ?? "none"}
                     onClick={() => set("reasoningEffort", level)}
                     className={cn(
                       "rounded-lg px-2 py-1 text-[0.625rem] font-medium transition-all",
@@ -2646,7 +3342,7 @@ function AdvancedParametersSection({
                         : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
                     )}
                   >
-                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "Auto"}
+                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "None"}
                   </button>
                 ))}
               </div>
@@ -2662,7 +3358,7 @@ function AdvancedParametersSection({
               <div className="mt-1 flex gap-1.5">
                 {([null, "low", "medium", "high"] as const).map((level) => (
                   <button
-                    key={level ?? "auto"}
+                    key={level ?? "none"}
                     onClick={() => set("verbosity", level)}
                     className={cn(
                       "rounded-lg px-2 py-1 text-[0.625rem] font-medium transition-all",
@@ -2671,7 +3367,7 @@ function AdvancedParametersSection({
                         : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
                     )}
                   >
-                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "Auto"}
+                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "None"}
                   </button>
                 ))}
               </div>
@@ -2706,6 +3402,28 @@ function AdvancedParametersSection({
                 )}
               </div>
             </div>
+          )}
+          {/* Save as Default for Connection */}
+          {connectionId && connectionId !== "random" && (
+            <button
+              onClick={() => {
+                const currentParams: ChatParameters = {
+                  temperature: get("temperature"),
+                  maxTokens: get("maxTokens"),
+                  topP: get("topP"),
+                  topK: get("topK"),
+                  frequencyPenalty: get("frequencyPenalty"),
+                  presencePenalty: get("presencePenalty"),
+                  reasoningEffort: get("reasoningEffort"),
+                  verbosity: get("verbosity"),
+                };
+                saveDefaults.mutate({ id: connectionId, params: currentParams as unknown as Record<string, unknown> });
+              }}
+              className="w-full rounded-lg bg-[var(--primary)]/10 px-3 py-1.5 text-[0.625rem] font-medium text-[var(--primary)] ring-1 ring-[var(--primary)]/20 transition-colors hover:bg-[var(--primary)]/20"
+            >
+              <Save size="0.625rem" className="inline mr-1 -mt-px" />
+              {saveDefaults.isPending ? "Saving…" : "Save as Connection Default"}
+            </button>
           )}
           {/* Reset */}
           <button

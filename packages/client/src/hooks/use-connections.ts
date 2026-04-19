@@ -82,3 +82,15 @@ export function useFetchModels() {
     mutationFn: (id: string) => api.get<{ models: Array<{ id: string; name: string }> }>(`/connections/${id}/models`),
   });
 }
+
+export function useSaveConnectionDefaults() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, params }: { id: string; params: Record<string, unknown> }) =>
+      api.put(`/connections/${id}/default-parameters`, params),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: connectionKeys.list() });
+      qc.invalidateQueries({ queryKey: connectionKeys.detail(variables.id) });
+    },
+  });
+}

@@ -1,11 +1,11 @@
 // ──────────────────────────────────────────────
 // Chat: Input — mode-aware styling
 // ──────────────────────────────────────────────
-import { useState, useRef, useCallback, useEffect, memo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import { Send, Paperclip, StopCircle, X, Smile, Users } from "lucide-react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { useQueryClient, useQuery, skipToken, type InfiniteData } from "@tanstack/react-query";
+import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
 import { useGenerate } from "../../hooks/use-generate";
@@ -122,16 +122,14 @@ export const ChatInput = memo(function ChatInput({
   }, []);
 
   // Reactively derive the last message's role from the query cache.
-  // pages[0] is the newest page; its last element is the most recent message.
-  const lastMessageRole =
-    useQuery({
-      queryKey: chatKeys.messages(activeChatId ?? ""),
-      queryFn: skipToken,
-      select: (data: InfiniteData<Message[]>) => {
-        const firstPage = data?.pages?.[0];
-        return firstPage?.[firstPage.length - 1]?.role ?? null;
-      },
-    }).data ?? null;
+  // Read directly from the cache to avoid creating a useQuery observer that
+  // conflicts with the useInfiniteQuery observer in useChatMessages (mixing
+  // useQuery and useInfiniteQuery on the same query key corrupts query state).
+  const messagesData = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(activeChatId ?? ""));
+  const lastMessageRole = useMemo(() => {
+    const firstPage = messagesData?.pages?.[0];
+    return firstPage?.[firstPage.length - 1]?.role ?? null;
+  }, [messagesData]);
 
   const canRetry = !isStreaming && lastMessageRole === "user";
   const canContinue = !isStreaming && mode === "roleplay" && lastMessageRole === "assistant";

@@ -52,9 +52,7 @@ export function RecentChats() {
 
   const recentChats = useMemo(() => {
     if (!chats || chats.length === 0) return [];
-    return [...chats]
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .slice(0, 3);
+    return [...chats].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 3);
   }, [chats]);
 
   if (recentChats.length === 0) return null;
@@ -66,12 +64,7 @@ export function RecentChats() {
       </p>
       <div className="flex w-full items-center justify-center gap-1.5">
         {recentChats.map((chat) => (
-          <RecentChatChip
-            key={chat.id}
-            chat={chat}
-            charLookup={charLookup}
-            onClick={() => setActiveChatId(chat.id)}
-          />
+          <RecentChatChip key={chat.id} chat={chat} charLookup={charLookup} onClick={() => setActiveChatId(chat.id)} />
         ))}
       </div>
     </div>
@@ -114,11 +107,7 @@ function RecentChatChip({
       {/* Small avatar with mode dot */}
       <div className="relative flex-shrink-0">
         {firstAvatar?.avatarUrl ? (
-          <img
-            src={firstAvatar.avatarUrl}
-            alt={firstAvatar.name}
-            className="h-5 w-5 rounded-md object-cover"
-          />
+          <img src={firstAvatar.avatarUrl} alt={firstAvatar.name} className="h-5 w-5 rounded-md object-cover" />
         ) : firstAvatar ? (
           <div className="flex h-5 w-5 items-center justify-center rounded-md bg-[var(--secondary)] text-[0.5rem] font-bold text-[var(--muted-foreground)]">
             {firstAvatar.name[0]}
@@ -143,9 +132,7 @@ function RecentChatChip({
       </div>
 
       {/* Chat name only */}
-      <span className="truncate text-[0.625rem] font-medium text-[var(--foreground)]">
-        {chat.name}
-      </span>
+      <span className="truncate text-[0.625rem] font-medium text-[var(--foreground)]">{chat.name}</span>
     </button>
   );
 }

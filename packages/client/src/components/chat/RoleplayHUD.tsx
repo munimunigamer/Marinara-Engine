@@ -43,6 +43,7 @@ interface RoleplayHUDProps {
   characterCount: number;
   layout?: HudPosition;
   onRetriggerTrackers?: () => void;
+  onRetryFailedAgents?: () => void;
   /** When true, tracker agents are manual — show a trigger button in the widget strip */
   manualTrackers?: boolean;
   /** When provided, overrides the globally-computed set so that only per-chat agents show widgets. */
@@ -77,6 +78,7 @@ export function RoleplayHUD({
   characterCount: _characterCount,
   layout = "top",
   onRetriggerTrackers,
+  onRetryFailedAgents,
   manualTrackers,
   mobileCompact,
   enabledAgentTypes: enabledAgentTypesProp,
@@ -100,6 +102,7 @@ export function RoleplayHUD({
 
   const thoughtBubbles = useAgentStore((s) => s.thoughtBubbles);
   const isAgentProcessing = useAgentStore((s) => s.isProcessing);
+  const failedAgentTypes = useAgentStore((s) => s.failedAgentTypes);
   const dismissThoughtBubble = useAgentStore((s) => s.dismissThoughtBubble);
   const clearThoughtBubbles = useAgentStore((s) => s.clearThoughtBubbles);
   const resetAgentStore = useAgentStore((s) => s.reset);
@@ -293,6 +296,8 @@ export function RoleplayHUD({
         enabledAgentTypes={enabledAgentTypes}
         clearGameState={clearGameState}
         onRetriggerTrackers={onRetriggerTrackers}
+        onRetryFailedAgents={onRetryFailedAgents}
+        failedAgentTypes={failedAgentTypes}
       />
 
       {/* ── Mobile: combined widgets, centered ── */}
@@ -470,6 +475,8 @@ interface ActionsGroupProps {
   enabledAgentTypes: Set<string>;
   clearGameState: () => void;
   onRetriggerTrackers?: () => void;
+  onRetryFailedAgents?: () => void;
+  failedAgentTypes: string[];
 }
 
 function ActionsGroup({
@@ -483,6 +490,8 @@ function ActionsGroup({
   enabledAgentTypes,
   clearGameState,
   onRetriggerTrackers,
+  onRetryFailedAgents,
+  failedAgentTypes,
 }: ActionsGroupProps) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -546,6 +555,8 @@ function ActionsGroup({
             echoMessageCount={echoMessages.length}
             clearGameState={clearGameState}
             onRetriggerTrackers={onRetriggerTrackers}
+            onRetryFailedAgents={onRetryFailedAgents}
+            failedAgentTypes={failedAgentTypes}
             onClose={() => setAgentsOpen(false)}
           />
         </Suspense>
@@ -580,6 +591,11 @@ function ActionsGroup({
         {badgeCount > 0 && (
           <span className="hidden md:flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-purple-500/80 px-1 text-[0.5rem] font-bold text-white">
             {badgeCount}
+          </span>
+        )}
+        {failedAgentTypes.length > 0 && (
+          <span className="flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500/80 px-1 text-[0.5rem] font-bold text-white">
+            {failedAgentTypes.length}
           </span>
         )}
       </button>
@@ -1186,7 +1202,7 @@ function WidgetLabel({
     <span className={cn("relative w-full max-md:px-0.5", className)}>
       <span
         className={cn(
-          "block mx-auto max-w-[4.5rem] max-md:max-w-full truncate text-center text-[0.5625rem] max-md:text-[0.4375rem] font-semibold leading-tight",
+          "block mx-auto max-w-[4.5rem] max-md:max-w-full overflow-x-auto scrollbar-hide whitespace-nowrap text-center text-[0.5625rem] max-md:text-[0.4375rem] font-semibold leading-tight",
           !value && "italic opacity-40",
         )}
       >

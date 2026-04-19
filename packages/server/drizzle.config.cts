@@ -50,6 +50,7 @@ export default defineConfig({
     "./src/db/schema/agents.ts",
     "./src/db/schema/custom-tools.ts",
     "./src/db/schema/game-state.ts",
+    "./src/db/schema/checkpoints.ts",
     "./src/db/schema/regex-scripts.ts",
     "./src/db/schema/gallery.ts",
   ],

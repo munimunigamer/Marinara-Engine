@@ -30,6 +30,19 @@ export async function connectionsRoutes(app: FastifyInstance) {
     return storage.update(req.params.id, data);
   });
 
+  // Save default generation parameters for a connection
+  app.put<{ Params: { id: string } }>("/:id/default-parameters", async (req, reply) => {
+    const conn = await storage.getById(req.params.id);
+    if (!conn) return reply.status(404).send({ error: "Connection not found" });
+    const raw = req.body;
+    if (raw !== null && (typeof raw !== "object" || Array.isArray(raw))) {
+      return reply.status(400).send({ error: "Body must be a JSON object or null" });
+    }
+    const params = raw as Record<string, unknown> | null;
+    await storage.updateDefaultParameters(req.params.id, params);
+    return { success: true };
+  });
+
   app.delete<{ Params: { id: string } }>("/:id", async (req, reply) => {
     await storage.remove(req.params.id);
     return reply.status(204).send();

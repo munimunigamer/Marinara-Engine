@@ -19,7 +19,10 @@ import { normalizeTimestampOverrides } from "../services/import/import-timestamp
 import AdmZip from "adm-zip";
 
 function toSafeExportName(name: string, fallback: string) {
-  const sanitized = name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim();
+  const sanitized = name
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   return sanitized || fallback;
 }
 

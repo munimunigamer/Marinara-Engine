@@ -39,10 +39,11 @@ export function mirrorSpritePlacements(placements: SpritePlacementMap): SpritePl
   );
 }
 
-export function getDefaultSpritePlacement(index: number, total: number, side: SpriteSide): SpritePlacement {
-  const layouts: Record<SpriteSide, number[][]> = {
+export function getDefaultSpritePlacement(index: number, total: number, side: SpriteSide | "center"): SpritePlacement {
+  const layouts: Record<string, number[][]> = {
     left: [[26], [22, 42], [18, 34, 50]],
     right: [[74], [58, 78], [50, 66, 82]],
+    center: [[50], [35, 65], [25, 50, 75]],
   };
 
   const byCount = layouts[side][Math.max(0, Math.min(total, 3) - 1)] ?? layouts[side][0];

@@ -3,7 +3,7 @@
 // Replaces the chat area when editing a lorebook.
 // Tabs: Overview, Entries, Entry Editor
 // ──────────────────────────────────────────────
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import {
   useLorebook,
   useUpdateLorebook,
@@ -42,6 +42,7 @@ import {
   Check,
   Lock,
   Tag,
+  Wand2,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -59,6 +60,7 @@ const CATEGORY_OPTIONS: Array<{ value: LorebookCategory; label: string; icon: ty
   { value: "world", label: "World", icon: Globe },
   { value: "character", label: "Character", icon: Users },
   { value: "npc", label: "NPC", icon: UserRound },
+  { value: "spellbook", label: "Spellbook", icon: Wand2 },
   { value: "uncategorized", label: "Uncategorized", icon: BookOpen },
 ];
 
@@ -66,7 +68,7 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-type EntrySortKey = "order" | "name-asc" | "name-desc" | "tokens" | "keys";
+type EntrySortKey = "order" | "name-asc" | "name-desc" | "tokens" | "keys" | "newest" | "oldest";
 
 const SORT_OPTIONS: Array<{ value: EntrySortKey; label: string }> = [
   { value: "order", label: "Order" },
@@ -74,6 +76,8 @@ const SORT_OPTIONS: Array<{ value: EntrySortKey; label: string }> = [
   { value: "name-desc", label: "Name Z→A" },
   { value: "tokens", label: "Tokens ↓" },
   { value: "keys", label: "Keys ↓" },
+  { value: "newest", label: "Newest" },
+  { value: "oldest", label: "Oldest" },
 ];
 
 export function LorebookEditor() {
@@ -179,6 +183,10 @@ export function LorebookEditor() {
         return [...result].sort((a, b) => estimateTokens(b.content) - estimateTokens(a.content));
       case "keys":
         return [...result].sort((a, b) => b.keys.length - a.keys.length);
+      case "newest":
+        return [...result].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+      case "oldest":
+        return [...result].sort((a, b) => (a.updatedAt ?? "").localeCompare(b.updatedAt ?? ""));
       case "order":
       default:
         return [...result].sort((a, b) => a.order - b.order);
@@ -187,6 +195,19 @@ export function LorebookEditor() {
 
   // ── Handlers ──
   const markDirty = useCallback(() => setDirty(true), []);
+
+  // Preserve main scroll position across entry editor sub-view so returning
+  // from an entry doesn't reset a long entry list (e.g. 250 entries on mobile).
+  const mainScrollRef = useRef<HTMLDivElement | null>(null);
+  const savedScrollTopRef = useRef(0);
+  const openEntry = useCallback((entryId: string) => {
+    savedScrollTopRef.current = mainScrollRef.current?.scrollTop ?? 0;
+    setEditingEntryId(entryId);
+  }, []);
+  useLayoutEffect(() => {
+    if (editingEntryId || !mainScrollRef.current) return;
+    mainScrollRef.current.scrollTop = savedScrollTopRef.current;
+  }, [editingEntryId, activeTab]);
 
   const handleSaveLorebook = useCallback(async () => {
     if (!lorebookId) return;
@@ -689,7 +710,7 @@ export function LorebookEditor() {
         </nav>
 
         {/* Tab Content */}
-        <div className="flex-1 overflow-y-auto p-6 @max-5xl:p-4">
+        <div ref={mainScrollRef} className="flex-1 overflow-y-auto p-6 @max-5xl:p-4">
           <div className="mx-auto max-w-3xl">
             {activeTab === "overview" && (
               <div className="space-y-6">
@@ -1012,7 +1033,7 @@ export function LorebookEditor() {
                 {filteredEntries.map((entry) => (
                   <div
                     key={entry.id}
-                    onClick={() => setEditingEntryId(entry.id)}
+                    onClick={() => openEntry(entry.id)}
                     className="group flex cursor-pointer items-center gap-3 rounded-xl bg-[var(--secondary)] p-3 ring-1 ring-[var(--border)] transition-all hover:ring-amber-400/30"
                   >
                     <div className="min-w-0 flex-1">

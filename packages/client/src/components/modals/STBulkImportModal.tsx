@@ -362,7 +362,10 @@ export function STBulkImportModal({ open, onClose }: Props) {
                     browserFolders.map((name) => (
                       <button
                         key={name}
-                        onClick={() => loadDirectory(browserPath ? `${browserPath}\\${name}` : name)}
+                        onClick={() => {
+                          const sep = browserPath.includes("\\") ? "\\" : "/";
+                          loadDirectory(browserPath ? `${browserPath}${sep}${name}` : name);
+                        }}
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--accent)]"
                       >
                         <Folder size="0.8125rem" className="shrink-0 text-sky-400" />
@@ -442,7 +445,12 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 items={scanResult.characters}
                 selectedIds={selection.characters}
                 onToggleItem={(itemId, checked) => toggleCategoryItem("characters", itemId, checked)}
-                onSelectAll={() => updateCategorySelection("characters", scanResult.characters.map((item) => item.id))}
+                onSelectAll={() =>
+                  updateCategorySelection(
+                    "characters",
+                    scanResult.characters.map((item) => item.id),
+                  )
+                }
                 onSelectNone={() => updateCategorySelection("characters", [])}
                 renderDetails={(item) => {
                   const modified = formatModifiedAt(item.modifiedAt);
@@ -461,7 +469,12 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 items={scanResult.chats}
                 selectedIds={selection.chats}
                 onToggleItem={(itemId, checked) => toggleCategoryItem("chats", itemId, checked)}
-                onSelectAll={() => updateCategorySelection("chats", scanResult.chats.map((item) => item.id))}
+                onSelectAll={() =>
+                  updateCategorySelection(
+                    "chats",
+                    scanResult.chats.map((item) => item.id),
+                  )
+                }
                 onSelectNone={() => updateCategorySelection("chats", [])}
                 getItemLabel={(item) => item.characterName || item.name}
                 renderDetails={(item) => {
@@ -481,7 +494,12 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 items={scanResult.groupChats}
                 selectedIds={selection.groupChats}
                 onToggleItem={(itemId, checked) => toggleCategoryItem("groupChats", itemId, checked)}
-                onSelectAll={() => updateCategorySelection("groupChats", scanResult.groupChats.map((item) => item.id))}
+                onSelectAll={() =>
+                  updateCategorySelection(
+                    "groupChats",
+                    scanResult.groupChats.map((item) => item.id),
+                  )
+                }
                 onSelectNone={() => updateCategorySelection("groupChats", [])}
                 getItemLabel={(item) => item.groupName || item.name}
                 renderDetails={(item) => {
@@ -501,7 +519,12 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 items={scanResult.presets}
                 selectedIds={selection.presets}
                 onToggleItem={(itemId, checked) => toggleCategoryItem("presets", itemId, checked)}
-                onSelectAll={() => updateCategorySelection("presets", scanResult.presets.map((item) => item.id))}
+                onSelectAll={() =>
+                  updateCategorySelection(
+                    "presets",
+                    scanResult.presets.map((item) => item.id),
+                  )
+                }
                 onSelectNone={() => updateCategorySelection("presets", [])}
                 renderDetails={(item) => {
                   const modified = formatModifiedAt(item.modifiedAt);
@@ -527,7 +550,12 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 items={scanResult.lorebooks}
                 selectedIds={selection.lorebooks}
                 onToggleItem={(itemId, checked) => toggleCategoryItem("lorebooks", itemId, checked)}
-                onSelectAll={() => updateCategorySelection("lorebooks", scanResult.lorebooks.map((item) => item.id))}
+                onSelectAll={() =>
+                  updateCategorySelection(
+                    "lorebooks",
+                    scanResult.lorebooks.map((item) => item.id),
+                  )
+                }
                 onSelectNone={() => updateCategorySelection("lorebooks", [])}
                 renderDetails={(item) => {
                   const modified = formatModifiedAt(item.modifiedAt);
@@ -542,7 +570,10 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 selectedIds={selection.backgrounds}
                 onToggleItem={(itemId, checked) => toggleCategoryItem("backgrounds", itemId, checked)}
                 onSelectAll={() =>
-                  updateCategorySelection("backgrounds", scanResult.backgrounds.map((item) => item.id))
+                  updateCategorySelection(
+                    "backgrounds",
+                    scanResult.backgrounds.map((item) => item.id),
+                  )
                 }
                 onSelectNone={() => updateCategorySelection("backgrounds", [])}
                 renderDetails={(item) => {
@@ -557,7 +588,12 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 items={scanResult.personas}
                 selectedIds={selection.personas}
                 onToggleItem={(itemId, checked) => toggleCategoryItem("personas", itemId, checked)}
-                onSelectAll={() => updateCategorySelection("personas", scanResult.personas.map((item) => item.id))}
+                onSelectAll={() =>
+                  updateCategorySelection(
+                    "personas",
+                    scanResult.personas.map((item) => item.id),
+                  )
+                }
                 onSelectNone={() => updateCategorySelection("personas", [])}
                 renderDetails={(item) => {
                   const modified = formatModifiedAt(item.modifiedAt);
@@ -745,7 +781,9 @@ function SelectableImportCategory<T extends ScanItemBase>({
   return (
     <div className="rounded-lg border border-[var(--border)]">
       <div className="flex items-center gap-2.5 p-2.5">
-        <span className={cn("shrink-0 text-[var(--muted-foreground)]", items.length === 0 && "opacity-40")}>{icon}</span>
+        <span className={cn("shrink-0 text-[var(--muted-foreground)]", items.length === 0 && "opacity-40")}>
+          {icon}
+        </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium">
@@ -803,7 +841,9 @@ function SelectableImportCategory<T extends ScanItemBase>({
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="truncate text-xs font-medium">{getItemLabel ? getItemLabel(item) : item.name}</span>
+                    <span className="truncate text-xs font-medium">
+                      {getItemLabel ? getItemLabel(item) : item.name}
+                    </span>
                     {renderBadge?.(item)}
                     {checked && (
                       <span className="shrink-0 rounded-full bg-[var(--primary)]/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-[var(--primary)]">

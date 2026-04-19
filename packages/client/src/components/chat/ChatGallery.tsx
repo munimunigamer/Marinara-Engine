@@ -2,7 +2,7 @@
 // Chat Gallery — Image grid for per-chat generated images
 // ──────────────────────────────────────────────
 import { useState, useRef } from "react";
-import { ImagePlus, Trash2, X, ZoomIn, Download, Sparkles, Pin, Minimize2 } from "lucide-react";
+import { ImagePlus, Paintbrush, Trash2, X, ZoomIn, Download, Sparkles, Pin, Minimize2 } from "lucide-react";
 import {
   useGalleryImages,
   useUploadGalleryImage,
@@ -13,9 +13,11 @@ import { useGalleryStore } from "../../stores/gallery.store";
 
 interface ChatGalleryProps {
   chatId: string;
+  /** Manually trigger the Illustrator agent */
+  onIllustrate?: () => void;
 }
 
-export function ChatGallery({ chatId }: ChatGalleryProps) {
+export function ChatGallery({ chatId, onIllustrate }: ChatGalleryProps) {
   const { data: images, isLoading } = useGalleryImages(chatId);
   const upload = useUploadGalleryImage(chatId);
   const remove = useDeleteGalleryImage(chatId);
@@ -41,6 +43,17 @@ export function ChatGallery({ chatId }: ChatGalleryProps) {
 
   return (
     <div className="flex flex-col gap-3 p-4">
+      {/* Illustrate button */}
+      {onIllustrate && (
+        <button
+          onClick={onIllustrate}
+          className="flex items-center justify-center gap-2 rounded-xl bg-[var(--primary)]/15 px-4 py-3 text-xs font-medium text-[var(--primary)] transition-all hover:bg-[var(--primary)]/25"
+        >
+          <Paintbrush size="1rem" />
+          Illustrate
+        </button>
+      )}
+
       {/* Upload button */}
       <button
         onClick={() => fileInputRef.current?.click()}
@@ -106,12 +119,6 @@ export function ChatGallery({ chatId }: ChatGalleryProps) {
                   </button>
                 </div>
               </div>
-              {/* Prompt label */}
-              {img.prompt && (
-                <div className="absolute left-0 top-0 max-w-full truncate bg-black/50 px-2 py-0.5 text-[0.5625rem] text-white/80 opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
-                  {img.prompt}
-                </div>
-              )}
             </div>
           ))}
         </div>
@@ -178,18 +185,6 @@ export function ChatGallery({ chatId }: ChatGalleryProps) {
                 <X size="0.875rem" />
               </button>
             </div>
-            {/* Info bar */}
-            {(lightbox.prompt || lightbox.provider) && (
-              <div className="absolute bottom-0 left-0 right-0 rounded-b-lg bg-black/60 p-3 text-white backdrop-blur-sm">
-                {lightbox.prompt && <p className="text-xs">{lightbox.prompt}</p>}
-                {lightbox.provider && (
-                  <p className="mt-1 text-[0.625rem] text-white/60">
-                    {lightbox.provider}
-                    {lightbox.model ? ` · ${lightbox.model}` : ""}
-                  </p>
-                )}
-              </div>
-            )}
           </div>
         </div>
       )}

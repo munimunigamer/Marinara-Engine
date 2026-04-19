@@ -235,7 +235,7 @@ export function useUpdateMessage(chatId: string | null) {
       await qc.cancelQueries({ queryKey: chatKeys.messages(chatId) });
       const previous = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId));
       qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) => {
-        if (!old) return old;
+        if (!old?.pages) return old;
         return {
           ...old,
           pages: old.pages.map((page) => page.map((msg) => (msg.id === messageId ? { ...msg, content } : msg))),

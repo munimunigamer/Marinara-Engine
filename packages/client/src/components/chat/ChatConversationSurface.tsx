@@ -56,6 +56,7 @@ type ConversationSurfaceProps = {
   onCloseSettings: () => void;
   onCloseFiles: () => void;
   onCloseGallery: () => void;
+  onIllustrate?: () => void;
   onWizardFinish: () => void;
   onClosePeekPrompt: () => void;
   onResetSpritePlacements: () => void;
@@ -112,6 +113,7 @@ export function ChatConversationSurface({
   onCloseSettings,
   onCloseFiles,
   onCloseGallery,
+  onIllustrate,
   onWizardFinish,
   onClosePeekPrompt,
   onResetSpritePlacements,
@@ -183,6 +185,7 @@ export function ChatConversationSurface({
         onCloseSettings={onCloseSettings}
         onCloseFiles={onCloseFiles}
         onCloseGallery={onCloseGallery}
+        onIllustrate={onIllustrate}
         onWizardFinish={onWizardFinish}
         onClosePeekPrompt={onClosePeekPrompt}
         onDeleteConfirm={onDeleteConfirm}

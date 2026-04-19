@@ -4,6 +4,7 @@
 import { PanelLeft, Home, Settings, Link, BookOpen, Users, Sparkles, FileText, UserCircle, Bot } from "lucide-react";
 import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
+import { useAgentStore } from "../../stores/agent.store";
 import { cn } from "../../lib/utils";
 
 const RIGHT_PANEL_BUTTONS = [
@@ -22,6 +23,7 @@ export function TopBar() {
   const rightPanelOpen = useUIStore((s) => s.rightPanelOpen);
   const setActiveChatId = useChatStore((s) => s.setActiveChatId);
   const closeAllDetails = useUIStore((s) => s.closeAllDetails);
+  const failedAgentCount = useAgentStore((s) => s.failedAgentTypes.length);
 
   const isBotBrowserActive = rightPanelOpen && rightPanel === "bot-browser";
 
@@ -101,6 +103,9 @@ export function TopBar() {
                     color,
                   )}
                 />
+              )}
+              {panel === "agents" && failedAgentCount > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-500 ring-1 ring-[var(--card)]" />
               )}
             </button>
           );

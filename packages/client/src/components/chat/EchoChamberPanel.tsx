@@ -125,9 +125,13 @@ export function EchoChamberPanel() {
           const alreadyHasMessages = useAgentStore.getState().echoMessages.length > 0;
           setEchoMessages(msgs);
           if (!alreadyHasMessages) {
-            // Fresh load (page refresh) — show all persisted immediately
-            setEchoVisibleCount(msgs.length);
-            setEchoBaseline(msgs.length);
+            // Fresh load (page refresh) — show all persisted immediately.
+            // Read the actual store length (may be capped) rather than the API
+            // response length — a mismatch causes the stagger guard to skip,
+            // making new messages dump all at once instead of one-by-one.
+            const loaded = useAgentStore.getState().echoMessages.length;
+            setEchoVisibleCount(loaded);
+            setEchoBaseline(loaded);
           }
         }
       })

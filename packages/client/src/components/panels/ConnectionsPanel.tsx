@@ -1,17 +1,31 @@
 // ──────────────────────────────────────────────
 // Panel: API Connections (polished)
 // ──────────────────────────────────────────────
+import { useState, useEffect } from "react";
 import {
   useConnections,
   useCreateConnection,
   useDuplicateConnection,
   useDeleteConnection,
-  useTestConnection,
   useUpdateConnection,
 } from "../../hooks/use-connections";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
-import { Plus, Trash2, Link, CheckCircle, Loader2, Check, Shuffle, ExternalLink, X, Copy } from "lucide-react";
+import { useSidecarStore } from "../../stores/sidecar.store";
+import {
+  Plus,
+  Trash2,
+  Link,
+  Loader2,
+  Check,
+  Shuffle,
+  ExternalLink,
+  X,
+  Copy,
+  BrainCircuit,
+  Download,
+  Trash,
+} from "lucide-react";
 import { cn } from "../../lib/utils";
 
 /** Provider → gradient color pair for connection icons. */
@@ -32,13 +46,134 @@ const PROVIDER_COLORS: Record<string, { from: string; to: string; ring: string; 
 };
 const DEFAULT_COLOR = { from: "from-sky-400", to: "to-blue-500", ring: "ring-sky-400/40", badge: "bg-sky-400" };
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function SidecarCard() {
+  const { status, config, modelSize, setShowDownloadModal, updateConfig, deleteModel, fetchStatus } = useSidecarStore();
+  const isDownloaded = status === "downloaded" || status === "ready" || status === "loading";
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Fetch status on mount (handles HMR store resets and initial load)
+  useEffect(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  return (
+    <div className="rounded-xl border border-purple-400/20 bg-gradient-to-br from-purple-500/5 to-fuchsia-500/5 p-3">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-purple-400 to-fuchsia-500 text-white shadow-sm">
+          <BrainCircuit size="1rem" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">Local Model</div>
+          <div className="text-[0.6875rem] text-[var(--muted-foreground)]">
+            {isDownloaded
+              ? `Gemma 4 E2B • ${config.quantization?.toUpperCase()}${modelSize ? ` • ${formatBytes(modelSize)}` : ""}`
+              : "Not downloaded"}
+          </div>
+        </div>
+        {isDownloaded ? (
+          confirmDelete ? (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="rounded-lg px-2 py-1 text-[0.625rem] text-[var(--muted-foreground)] transition-all hover:bg-[var(--secondary)]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  deleteModel();
+                  setConfirmDelete(false);
+                }}
+                className="rounded-lg px-2 py-1 text-[0.625rem] font-medium text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/15"
+              >
+                Delete
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-all hover:bg-[var(--destructive)]/15 active:scale-90"
+              title="Delete model"
+            >
+              <Trash size="0.8125rem" className="text-[var(--destructive)]" />
+            </button>
+          )
+        ) : (
+          <button
+            onClick={() => {
+              fetchStatus();
+              setShowDownloadModal(true);
+            }}
+            className="rounded-lg p-1.5 text-purple-400 transition-all hover:bg-purple-400/15 active:scale-90"
+            title="Download model"
+          >
+            <Download size="0.8125rem" />
+          </button>
+        )}
+      </div>
+
+      {/* Toggles (only when model is downloaded) */}
+      {isDownloaded && (
+        <div className="mt-2.5 flex flex-col gap-1.5 border-t border-purple-400/10 pt-2.5">
+          <button
+            type="button"
+            onClick={() => updateConfig({ useForTrackers: !config.useForTrackers })}
+            className="flex items-center gap-2.5 cursor-pointer select-none text-left"
+          >
+            <div className="relative shrink-0">
+              <div
+                className={cn(
+                  "h-4 w-7 rounded-full transition-colors",
+                  config.useForTrackers ? "bg-purple-400/70" : "bg-[var(--border)]",
+                )}
+              />
+              <div
+                className={cn(
+                  "absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform",
+                  config.useForTrackers && "translate-x-3",
+                )}
+              />
+            </div>
+            <span className="text-xs text-[var(--muted-foreground)]">Use for tracker agents (roleplay)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => updateConfig({ useForGameScene: !config.useForGameScene })}
+            className="flex items-center gap-2.5 cursor-pointer select-none text-left"
+          >
+            <div className="relative shrink-0">
+              <div
+                className={cn(
+                  "h-4 w-7 rounded-full transition-colors",
+                  config.useForGameScene ? "bg-purple-400/70" : "bg-[var(--border)]",
+                )}
+              />
+              <div
+                className={cn(
+                  "absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform",
+                  config.useForGameScene && "translate-x-3",
+                )}
+              />
+            </div>
+            <span className="text-xs text-[var(--muted-foreground)]">Use for game scene analysis</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ConnectionsPanel() {
   const { data: connections, isLoading } = useConnections();
   const createConnection = useCreateConnection();
   const duplicateConnection = useDuplicateConnection();
   const deleteConnection = useDeleteConnection();
   const updateConnection = useUpdateConnection();
-  const testConnection = useTestConnection();
   const activeChat = useChatStore((s) => s.activeChat);
 
   const activeConnectionId = activeChat?.connectionId ?? null;
@@ -59,6 +194,9 @@ export function ConnectionsPanel() {
 
   return (
     <div className="flex flex-col gap-2 p-3">
+      {/* ── Local Model (Sidecar) ── */}
+      <SidecarCard />
+
       <button
         onClick={handleCreate}
         disabled={createConnection.isPending}
@@ -157,7 +295,9 @@ export function ConnectionsPanel() {
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{conn.name}</div>
+                <div className="truncate text-sm font-medium" title={conn.name}>
+                  {conn.name}
+                </div>
                 <div className="truncate text-[0.6875rem] text-[var(--muted-foreground)]">
                   {conn.provider} • {conn.model || "No model set"}
                 </div>
@@ -177,20 +317,6 @@ export function ConnectionsPanel() {
                   title={inRandomPool ? "In random pool (click to remove)" : "Add to random pool"}
                 >
                   <Shuffle size="0.8125rem" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    testConnection.mutate(conn.id);
-                  }}
-                  className="rounded-lg p-1.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-all hover:bg-sky-400/10 active:scale-90"
-                  title="Test connection"
-                >
-                  {testConnection.isPending ? (
-                    <Loader2 size="0.8125rem" className="animate-spin" />
-                  ) : (
-                    <CheckCircle size="0.8125rem" />
-                  )}
                 </button>
                 <button
                   onClick={(e) => {

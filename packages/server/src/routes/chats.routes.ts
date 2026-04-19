@@ -39,13 +39,36 @@ export async function chatsRoutes(app: FastifyInstance) {
   app.post("/", async (req) => {
     const input = createChatSchema.parse(req.body);
     const body = req.body as Record<string, unknown>;
-    return storage.create(
+    const chat = await storage.create(
       input,
       normalizeTimestampOverrides({
         createdAt: body.createdAt,
         updatedAt: body.updatedAt,
       }),
     );
+    if (!chat) return chat;
+
+    // Pre-populate chat parameters from connection defaults if available
+    if (input.connectionId && input.connectionId !== "random") {
+      const connStorage = createConnectionsStorage(app.db);
+      const conn = await connStorage.getById(input.connectionId);
+      if (conn?.defaultParameters) {
+        let connDefaults: unknown = null;
+        try {
+          connDefaults =
+            typeof conn.defaultParameters === "string" ? JSON.parse(conn.defaultParameters) : conn.defaultParameters;
+        } catch {
+          /* malformed JSON — skip defaults */
+        }
+        if (connDefaults && typeof connDefaults === "object") {
+          const existingMeta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
+          await storage.updateMetadata(chat.id, { ...existingMeta, chatParameters: connDefaults });
+          return storage.getById(chat.id);
+        }
+      }
+    }
+
+    return chat;
   });
 
   // Update chat
@@ -234,19 +257,26 @@ export async function chatsRoutes(app: FastifyInstance) {
     if (charsNeedingAvatar.length > 0) {
       const chat = await storage.getById(req.params.id);
       const chatCharIds: string[] = (() => {
-        try { return JSON.parse((chat?.characterIds as string) ?? "[]"); }
-        catch { return []; }
+        try {
+          return JSON.parse((chat?.characterIds as string) ?? "[]");
+        } catch {
+          return [];
+        }
       })();
       // Build a name → avatarPath map from the chat's character records
       const nameToAvatar = new Map<string, string>();
       if (chatCharIds.length > 0) {
-        const charRows = await app.db.select({ id: characters.id, data: characters.data, avatarPath: characters.avatarPath })
-          .from(characters).where(inArray(characters.id, chatCharIds));
+        const charRows = await app.db
+          .select({ id: characters.id, data: characters.data, avatarPath: characters.avatarPath })
+          .from(characters)
+          .where(inArray(characters.id, chatCharIds));
         for (const cr of charRows) {
           try {
             const d = typeof cr.data === "string" ? JSON.parse(cr.data) : cr.data;
             if (d?.name && cr.avatarPath) nameToAvatar.set((d.name as string).toLowerCase(), cr.avatarPath as string);
-          } catch { /* skip */ }
+          } catch {
+            /* skip */
+          }
         }
       }
       const NPC_AVATAR_DIR = join(DATA_DIR, "avatars", "npc");
@@ -254,9 +284,15 @@ export async function chatsRoutes(app: FastifyInstance) {
         const name = char.name as string;
         // 1. Try matching a known character card by name
         const knownAvatar = nameToAvatar.get(name.toLowerCase());
-        if (knownAvatar) { char.avatarPath = knownAvatar; continue; }
+        if (knownAvatar) {
+          char.avatarPath = knownAvatar;
+          continue;
+        }
         // 2. Try loading a stored NPC avatar from disk
-        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        const safeName = name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/(^-|-$)/g, "");
         if (safeName) {
           const npcPath = join(NPC_AVATAR_DIR, req.params.id, `${safeName}.png`);
           if (existsSync(npcPath)) char.avatarPath = `/api/avatars/npc/${req.params.id}/${safeName}.png`;

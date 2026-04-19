@@ -166,6 +166,8 @@ type ChatCommonOverlaysProps = {
   onCloseSettings: () => void;
   onCloseFiles: () => void;
   onCloseGallery: () => void;
+  /** Manually trigger the Illustrator agent */
+  onIllustrate?: () => void;
   onWizardFinish: () => void;
   onClosePeekPrompt: () => void;
   onDeleteConfirm: () => void;
@@ -193,6 +195,7 @@ export function ChatCommonOverlays({
   onCloseSettings,
   onCloseFiles,
   onCloseGallery,
+  onIllustrate,
   onWizardFinish,
   onClosePeekPrompt,
   onDeleteConfirm,
@@ -228,7 +231,9 @@ export function ChatCommonOverlays({
       )}
       {chat && (
         <Suspense fallback={null}>
-          {galleryOpen && <ChatGalleryDrawer chat={chat} open={galleryOpen} onClose={onCloseGallery} />}
+          {galleryOpen && (
+            <ChatGalleryDrawer chat={chat} open={galleryOpen} onClose={onCloseGallery} onIllustrate={onIllustrate} />
+          )}
         </Suspense>
       )}
       {chat && (

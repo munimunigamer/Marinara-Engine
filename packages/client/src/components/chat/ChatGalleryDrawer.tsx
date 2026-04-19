@@ -9,9 +9,11 @@ interface ChatGalleryDrawerProps {
   chat: Chat;
   open: boolean;
   onClose: () => void;
+  /** Manually trigger the Illustrator agent */
+  onIllustrate?: () => void;
 }
 
-export function ChatGalleryDrawer({ chat, open, onClose }: ChatGalleryDrawerProps) {
+export function ChatGalleryDrawer({ chat, open, onClose, onIllustrate }: ChatGalleryDrawerProps) {
   if (!open) return null;
 
   return (
@@ -33,7 +35,7 @@ export function ChatGalleryDrawer({ chat, open, onClose }: ChatGalleryDrawerProp
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          <ChatGallery chatId={chat.id} />
+          <ChatGallery chatId={chat.id} onIllustrate={onIllustrate} />
         </div>
       </div>
     </>

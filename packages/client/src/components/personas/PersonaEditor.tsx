@@ -25,12 +25,27 @@ import {
   X,
   Maximize2,
   Tag,
+  Image,
+  Upload,
+  FolderOpen,
+  Loader2,
+  Wand2,
+  ImageDown,
 } from "lucide-react";
 import { cn, generateClientId } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { ColorPicker } from "../ui/ColorPicker";
 import { ExpandedTextarea } from "../ui/ExpandedTextarea";
 import { api } from "../../lib/api-client";
+import {
+  useCharacterSprites,
+  useUploadSprite,
+  useDeleteSprite,
+  spriteKeys,
+  type SpriteInfo,
+} from "../../hooks/use-characters";
+import { useQueryClient } from "@tanstack/react-query";
+import { SpriteGenerationModal } from "../ui/SpriteGenerationModal";
 
 // ── Tabs ──
 const TABS = [
@@ -39,6 +54,7 @@ const TABS = [
   { id: "backstory", label: "Backstory", icon: BookOpen },
   { id: "appearance", label: "Appearance", icon: Eye },
   { id: "scenario", label: "Scenario", icon: MapPin },
+  { id: "sprites", label: "Sprites", icon: Image },
   { id: "colors", label: "Colors", icon: Palette },
   { id: "stats", label: "Stats", icon: Activity },
 ] as const;
@@ -409,10 +425,409 @@ export function PersonaEditor() {
               />
             )}
             {activeTab === "colors" && <PersonaColorsTab formData={formData} updateField={updateField} />}
+            {activeTab === "sprites" && personaId && (
+              <PersonaSpritesTab
+                personaId={personaId}
+                defaultAppearance={formData.appearance || formData.description}
+                defaultAvatarUrl={avatarPreview}
+              />
+            )}
             {activeTab === "stats" && <PersonaStatsTab formData={formData} updateField={updateField} />}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Persona Sprites Tab ──
+
+const DEFAULT_EXPRESSIONS = [
+  "neutral",
+  "happy",
+  "sad",
+  "angry",
+  "surprised",
+  "scared",
+  "disgusted",
+  "thinking",
+  "laughing",
+  "crying",
+  "blushing",
+  "smirk",
+];
+
+function PersonaSpritesTab({
+  personaId,
+  defaultAppearance,
+  defaultAvatarUrl,
+}: {
+  personaId: string;
+  defaultAppearance?: string;
+  defaultAvatarUrl?: string | null;
+}) {
+  type SpriteCategory = "expressions" | "full-body";
+
+  const { data: sprites, isLoading } = useCharacterSprites(personaId);
+  const uploadSprite = useUploadSprite();
+  const deleteSprite = useDeleteSprite();
+  const queryClient = useQueryClient();
+  const [category, setCategory] = useState<SpriteCategory>("expressions");
+  const [newExpression, setNewExpression] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [folderProgress, setFolderProgress] = useState<{ done: number; total: number } | null>(null);
+  const [spriteGenOpen, setSpriteGenOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const pendingExpressionRef = useRef("");
+
+  const allSprites = (sprites as SpriteInfo[] | undefined) ?? [];
+  const visibleSprites = allSprites.filter((s) =>
+    category === "full-body" ? s.expression.startsWith("full_") : !s.expression.startsWith("full_"),
+  );
+  const existingExpressions = new Set(
+    visibleSprites.map((s) => (category === "full-body" ? s.expression.replace(/^full_/, "") : s.expression)),
+  );
+  const suggestedExpressions = DEFAULT_EXPRESSIONS.filter((e) => !existingExpressions.has(e));
+
+  const normalizeExpressionForCategory = (raw: string) => {
+    const cleaned = raw
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, "_");
+    if (!cleaned) return "";
+    if (category === "full-body") {
+      return cleaned.startsWith("full_") ? cleaned : `full_${cleaned}`;
+    }
+    return cleaned.replace(/^full_/, "");
+  };
+
+  const displayExpression = (stored: string) => (category === "full-body" ? stored.replace(/^full_/, "") : stored);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const expression = pendingExpressionRef.current || normalizeExpressionForCategory(newExpression);
+    if (!expression) return;
+
+    setUploading(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        await uploadSprite.mutateAsync({ characterId: personaId, expression, image: reader.result as string });
+        setNewExpression("");
+        pendingExpressionRef.current = "";
+      } finally {
+        setUploading(false);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const startUpload = (expression: string) => {
+    if (!expression) return;
+    pendingExpressionRef.current = expression;
+    fileInputRef.current?.click();
+  };
+
+  const handleFolderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const imageFiles = Array.from(files).filter((f) => /\.(png|jpg|jpeg|gif|webp|avif)$/i.test(f.name));
+    if (imageFiles.length === 0) return;
+
+    setFolderProgress({ done: 0, total: imageFiles.length });
+    for (let i = 0; i < imageFiles.length; i++) {
+      const file = imageFiles[i]!;
+      const expression = file.name.replace(/\.[^.]+$/, "").trim();
+      const normalized = normalizeExpressionForCategory(expression);
+      if (!normalized) continue;
+      const dataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+      try {
+        await uploadSprite.mutateAsync({ characterId: personaId, expression: normalized, image: dataUrl });
+      } catch {
+        /* skip */
+      }
+      setFolderProgress({ done: i + 1, total: imageFiles.length });
+    }
+    setFolderProgress(null);
+    e.target.value = "";
+  };
+
+  const handleDelete = async (expression: string) => {
+    if (!confirm(`Delete sprite for "${expression}"?`)) return;
+    await deleteSprite.mutateAsync({ characterId: personaId, expression });
+  };
+
+  const downloadSpriteFile = useCallback(async (sprite: SpriteInfo) => {
+    const response = await fetch(sprite.url);
+    if (!response.ok) {
+      throw new Error(`Failed to download ${sprite.expression}`);
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = sprite.filename || `${sprite.expression}.png`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  }, []);
+
+  const handleExportSprites = useCallback(
+    async (spritesToExport: SpriteInfo[]) => {
+      if (spritesToExport.length === 0) return;
+
+      setExporting(true);
+      let successCount = 0;
+
+      try {
+        for (const sprite of spritesToExport) {
+          try {
+            await downloadSpriteFile(sprite);
+            successCount += 1;
+          } catch {
+            // Continue exporting remaining sprites.
+          }
+        }
+
+        if (successCount === 0) {
+          alert("No sprites were exported. Please try again.");
+        }
+      } finally {
+        setExporting(false);
+      }
+    },
+    [downloadSpriteFile],
+  );
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-sm font-semibold">Persona Sprites</h3>
+        <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+          Upload VN-style sprites for your persona. These are used in Game Mode and roleplay with the Expression Engine.
+        </p>
+      </div>
+
+      <div className="inline-flex rounded-xl bg-[var(--secondary)] p-1 ring-1 ring-[var(--border)]">
+        <button
+          onClick={() => setCategory("expressions")}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+            category === "expressions"
+              ? "bg-[var(--primary)]/15 text-[var(--primary)]"
+              : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+          )}
+        >
+          Facial Expressions
+        </button>
+        <button
+          onClick={() => setCategory("full-body")}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+            category === "full-body"
+              ? "bg-[var(--primary)]/15 text-[var(--primary)]"
+              : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+          )}
+        >
+          Full-body
+        </button>
+      </div>
+
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+      <input
+        ref={folderInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        // @ts-expect-error — webkitdirectory is non-standard but widely supported
+        webkitdirectory=""
+        className="hidden"
+        onChange={handleFolderUpload}
+      />
+
+      {/* Upload new expression */}
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-semibold flex items-center gap-1.5">
+            <Upload size="0.8125rem" className="text-[var(--primary)]" />
+            Add Sprite
+          </h4>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSpriteGenOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-purple-500/10 px-3 py-1.5 text-[0.6875rem] font-medium text-purple-400 ring-1 ring-purple-500/20 transition-all hover:bg-purple-500/20"
+              title="Generate sprites using AI image generation"
+            >
+              <Wand2 size="0.8125rem" />
+              Generate Sprite
+            </button>
+            <button
+              onClick={() => folderInputRef.current?.click()}
+              disabled={!!folderProgress}
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.6875rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+              title="Select a folder of PNGs"
+            >
+              <FolderOpen size="0.8125rem" />
+              Upload Folder
+            </button>
+            <button
+              onClick={() => handleExportSprites(visibleSprites)}
+              disabled={exporting || visibleSprites.length === 0}
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.6875rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+              title="Download currently visible sprites for external editing"
+            >
+              <ImageDown size="0.8125rem" />
+              {exporting ? "Exporting..." : `Export ${category === "full-body" ? "Full-body" : "Expressions"}`}
+            </button>
+            <button
+              onClick={() => handleExportSprites(allSprites)}
+              disabled={exporting || allSprites.length === 0}
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.6875rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+              title="Download all sprites across both categories"
+            >
+              <ImageDown size="0.8125rem" />
+              Export All
+            </button>
+          </div>
+        </div>
+
+        {folderProgress && (
+          <div className="flex items-center gap-2 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
+            <Loader2 size="0.75rem" className="animate-spin text-[var(--primary)]" />
+            Uploading {folderProgress.done}/{folderProgress.total} sprites…
+          </div>
+        )}
+        <div className="flex gap-2">
+          <input
+            value={newExpression}
+            onChange={(e) => setNewExpression(e.target.value)}
+            placeholder={
+              category === "full-body"
+                ? "Pose name (e.g. idle, walk, battle_stance)…"
+                : "Expression name (e.g. happy, sad, angry)…"
+            }
+            className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && newExpression.trim()) {
+                startUpload(normalizeExpressionForCategory(newExpression));
+              }
+            }}
+          />
+          <button
+            onClick={() => newExpression.trim() && startUpload(normalizeExpressionForCategory(newExpression))}
+            disabled={!newExpression.trim() || uploading}
+            className="flex items-center gap-1.5 rounded-xl bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] shadow-sm transition-all hover:shadow-md disabled:opacity-40"
+          >
+            <Plus size="0.8125rem" />
+            Upload
+          </button>
+        </div>
+
+        {category === "expressions" && suggestedExpressions.length > 0 && (
+          <div>
+            <p className="text-[0.625rem] text-[var(--muted-foreground)] mb-1.5">Quick add:</p>
+            <div className="flex flex-wrap gap-1">
+              {suggestedExpressions.slice(0, 12).map((expr) => (
+                <button
+                  key={expr}
+                  onClick={() => startUpload(expr)}
+                  className="rounded-lg bg-[var(--secondary)] px-2.5 py-1 text-[0.6875rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                >
+                  {expr}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Sprite grid */}
+      {isLoading ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="shimmer aspect-[3/4] rounded-xl" />
+          ))}
+        </div>
+      ) : visibleSprites.length ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+          {visibleSprites.map((sprite) => (
+            <div
+              key={sprite.expression}
+              className="group relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] transition-all hover:border-[var(--primary)]/30 hover:shadow-md"
+            >
+              <div className="aspect-[3/4] bg-[var(--secondary)]">
+                <img src={sprite.url} alt={sprite.expression} loading="lazy" className="h-full w-full object-contain" />
+              </div>
+              <div className="flex items-center justify-between p-2">
+                <span
+                  className="max-w-[10rem] truncate text-[0.6875rem] font-medium capitalize"
+                  title={displayExpression(sprite.expression)}
+                >
+                  {displayExpression(sprite.expression)}
+                </span>
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => void downloadSpriteFile(sprite)}
+                    className="rounded-lg p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    title="Download"
+                  >
+                    <ImageDown size="0.6875rem" />
+                  </button>
+                  <button
+                    onClick={() => startUpload(sprite.expression)}
+                    className="rounded-lg p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    title="Replace"
+                  >
+                    <Upload size="0.6875rem" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(sprite.expression)}
+                    className="rounded-lg p-1 text-[var(--muted-foreground)] hover:bg-[var(--destructive)]/15 hover:text-[var(--destructive)]"
+                    title="Delete"
+                  >
+                    <Trash2 size="0.6875rem" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="flex flex-col items-center gap-3 rounded-xl border-2 border-dashed border-[var(--border)] py-12 text-center">
+          <Image size="1.75rem" className="text-[var(--muted-foreground)]/40" />
+          <div>
+            <p className="text-sm font-medium text-[var(--muted-foreground)]">No sprites yet</p>
+            <p className="mt-0.5 text-xs text-[var(--muted-foreground)]/60">
+              {category === "full-body"
+                ? "Upload full-body sprites above. Use transparent PNGs for best results."
+                : "Upload expression sprites above. Use transparent PNGs for best results."}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Sprite Generation Modal */}
+      <SpriteGenerationModal
+        open={spriteGenOpen}
+        onClose={() => setSpriteGenOpen(false)}
+        entityId={personaId}
+        initialSpriteType={category === "full-body" ? "full-body" : "expressions"}
+        defaultAppearance={defaultAppearance}
+        defaultAvatarUrl={defaultAvatarUrl}
+        onSpritesGenerated={() => {
+          queryClient.invalidateQueries({ queryKey: spriteKeys.list(personaId) });
+        }}
+      />
     </div>
   );
 }
@@ -798,8 +1213,8 @@ function PersonaStatsTab({
               <h4 className="mb-1.5 text-xs font-semibold">How RPG attributes work</h4>
               <ul className="space-y-1 text-[0.6875rem] text-[var(--muted-foreground)]">
                 <li>
-                  &bull; <strong className="text-[var(--foreground)]">HP</strong> — Injected into the prompt so
-                  the AI knows your persona&apos;s current health.
+                  &bull; <strong className="text-[var(--foreground)]">HP</strong> — Injected into the prompt so the AI
+                  knows your persona&apos;s current health.
                 </li>
                 <li>
                   &bull; <strong className="text-[var(--foreground)]">Attributes</strong> — Custom stats (STR, DEX,

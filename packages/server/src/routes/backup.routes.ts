@@ -2,9 +2,10 @@
 // Routes: Backup
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
-import { basename, join } from "path";
+import { basename, join, relative } from "path";
 import { existsSync, readdirSync, statSync } from "fs";
 import { cp, mkdir, copyFile, readFile } from "fs/promises";
+import AdmZip from "adm-zip";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createPromptsStorage } from "../services/storage/prompts.storage.js";
@@ -62,6 +63,57 @@ export async function backupRoutes(app: FastifyInstance) {
       success: true,
       backupName,
     });
+  });
+
+  // Download a full backup as a single zip — client-side saves to a
+  // user-chosen location via the browser's Save dialog / File System Access
+  // API. Preferred on Android where the on-disk data folder isn't reachable.
+  app.post("/download", async (_req, reply) => {
+    const dataDir = getDataDir();
+    const dbPath = getDatabaseFilePath();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+    const backupName = `marinara-backup-${timestamp}`;
+
+    const zip = new AdmZip();
+
+    // 1. Add the database file (and WAL/SHM if present)
+    if (dbPath && existsSync(dbPath)) {
+      const dbName = basename(dbPath);
+      zip.addFile(`${backupName}/${dbName}`, await readFile(dbPath));
+      for (const ext of ["-wal", "-shm"]) {
+        const walSrc = dbPath + ext;
+        if (existsSync(walSrc)) {
+          zip.addFile(`${backupName}/${dbName}${ext}`, await readFile(walSrc));
+        }
+      }
+    }
+
+    // 2. Recursively add each data directory under backupName/<dir>/...
+    for (const dirName of BACKUP_DIRS) {
+      const src = join(dataDir, dirName);
+      if (!existsSync(src)) continue;
+      const stack: string[] = [src];
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        for (const entry of readdirSync(current)) {
+          const full = join(current, entry);
+          const st = statSync(full);
+          if (st.isDirectory()) {
+            stack.push(full);
+          } else if (st.isFile()) {
+            const rel = relative(dataDir, full).split(/[\\/]/g).join("/");
+            zip.addFile(`${backupName}/${rel}`, await readFile(full));
+          }
+        }
+      }
+    }
+
+    const buf = zip.toBuffer();
+    return reply
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", `attachment; filename="${backupName}.zip"`)
+      .header("Content-Length", buf.length.toString())
+      .send(buf);
   });
 
   // List existing backups
@@ -246,19 +298,25 @@ export async function backupRoutes(app: FastifyInstance) {
             const { writeFile } = await import("fs/promises");
             await writeFile(join(dataDir, personaAvatarPath), Buffer.from(p.avatarBase64, "base64"));
           }
-          await chars.createPersona(p.name, p.description ?? "", personaAvatarPath, {
-            comment: p.comment,
-            personality: p.personality,
-            backstory: p.backstory,
-            appearance: p.appearance,
-            scenario: p.scenario,
-            nameColor: p.nameColor,
-            dialogueColor: p.dialogueColor,
-            boxColor: p.boxColor,
-            personaStats: p.personaStats,
-            altDescriptions:
-              typeof p.altDescriptions === "string" ? p.altDescriptions : JSON.stringify(p.altDescriptions ?? []),
-          }, normalizeTimestampOverrides({ createdAt: p.createdAt, updatedAt: p.updatedAt }));
+          await chars.createPersona(
+            p.name,
+            p.description ?? "",
+            personaAvatarPath,
+            {
+              comment: p.comment,
+              personality: p.personality,
+              backstory: p.backstory,
+              appearance: p.appearance,
+              scenario: p.scenario,
+              nameColor: p.nameColor,
+              dialogueColor: p.dialogueColor,
+              boxColor: p.boxColor,
+              personaStats: p.personaStats,
+              altDescriptions:
+                typeof p.altDescriptions === "string" ? p.altDescriptions : JSON.stringify(p.altDescriptions ?? []),
+            },
+            normalizeTimestampOverrides({ createdAt: p.createdAt, updatedAt: p.updatedAt }),
+          );
           stats.personas++;
         } catch {
           /* skip */

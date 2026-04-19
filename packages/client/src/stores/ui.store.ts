@@ -89,6 +89,10 @@ interface UIState {
   enableStreaming: boolean;
   /** Typewriter speed: 1 (very slow) to 100 (instant). Controls how fast streaming tokens appear. */
   streamingSpeed: number;
+  /** Game narration text speed: 1 (very slow) to 100 (instant). Controls the typewriter in game mode. */
+  gameTextSpeed: number;
+  /** Delay in ms between auto-advancing narration segments when auto-play is enabled. */
+  gameAutoPlayDelay: number;
   debugMode: boolean;
   messageGrouping: boolean;
   showTimestamps: boolean;
@@ -133,6 +137,7 @@ interface UIState {
   // ── Input ──
   enterToSendRP: boolean;
   enterToSendConvo: boolean;
+  enterToSendGame: boolean;
 
   // ── Roleplay Effects ──
   weatherEffects: boolean;
@@ -151,6 +156,8 @@ interface UIState {
 
   // ── Onboarding ──
   hasCompletedOnboarding: boolean;
+  /** True once the user has permanently disabled the in-game tutorial (? icon still re-opens). */
+  gameTutorialDisabled: boolean;
 
   // ── Dismissals ──
   linkApiBannerDismissed: boolean;
@@ -213,6 +220,8 @@ interface UIState {
   setFontFamily: (family: string) => void;
   setEnableStreaming: (v: boolean) => void;
   setStreamingSpeed: (v: number) => void;
+  setGameTextSpeed: (v: number) => void;
+  setGameAutoPlayDelay: (v: number) => void;
   setDebugMode: (v: boolean) => void;
   setMessageGrouping: (v: boolean) => void;
   setShowTimestamps: (v: boolean) => void;
@@ -237,6 +246,7 @@ interface UIState {
   setCustomConversationPrompt: (v: string | null) => void;
   setEnterToSendRP: (v: boolean) => void;
   setEnterToSendConvo: (v: boolean) => void;
+  setEnterToSendGame: (v: boolean) => void;
   setWeatherEffects: (v: boolean) => void;
   setHudPosition: (v: HudPosition) => void;
   /** Legacy migration helpers for browser-local custom themes. */
@@ -250,6 +260,7 @@ interface UIState {
   removeExtension: (id: string) => void;
   toggleExtension: (id: string) => void;
   setHasCompletedOnboarding: (v: boolean) => void;
+  setGameTutorialDisabled: (v: boolean) => void;
   dismissLinkApiBanner: () => void;
   toggleEchoChamber: () => void;
   setEchoChamberSide: (side: EchoChamberSide) => void;
@@ -297,6 +308,7 @@ export function pickSyncedSettings(state: UIState) {
     weatherEffects: state.weatherEffects,
     hudPosition: state.hudPosition,
     hasCompletedOnboarding: state.hasCompletedOnboarding,
+    gameTutorialDisabled: state.gameTutorialDisabled,
     linkApiBannerDismissed: state.linkApiBannerDismissed,
     echoChamberSide: state.echoChamberSide,
     userStatusManual: state.userStatusManual,
@@ -337,6 +349,8 @@ export const useUIStore = create<UIState>()(
       fontFamily: "",
       enableStreaming: true,
       streamingSpeed: 50,
+      gameTextSpeed: 50,
+      gameAutoPlayDelay: 3000,
       debugMode: false,
       messageGrouping: true,
       showTimestamps: false,
@@ -360,6 +374,7 @@ export const useUIStore = create<UIState>()(
       customConversationPrompt: null,
       enterToSendRP: false,
       enterToSendConvo: true,
+      enterToSendGame: true,
       weatherEffects: true,
       hudPosition: "top" as HudPosition,
       activeCustomTheme: null,
@@ -367,6 +382,7 @@ export const useUIStore = create<UIState>()(
       hasMigratedCustomThemesToServer: false,
       installedExtensions: [],
       hasCompletedOnboarding: false,
+      gameTutorialDisabled: false,
       linkApiBannerDismissed: false,
       echoChamberOpen: false,
       echoChamberSide: "bottom-right" as EchoChamberSide,
@@ -376,7 +392,8 @@ export const useUIStore = create<UIState>()(
 
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
-      setSidebarWidth: (width) => set({ sidebarWidth: Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, width)) }),
+      setSidebarWidth: (width) =>
+        set({ sidebarWidth: Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, width)) }),
       setRightPanelWidth: (width) =>
         set({ rightPanelWidth: Math.max(RIGHT_PANEL_WIDTH_MIN, Math.min(RIGHT_PANEL_WIDTH_MAX, width)) }),
 
@@ -544,6 +561,8 @@ export const useUIStore = create<UIState>()(
       setFontFamily: (family) => set({ fontFamily: family }),
       setEnableStreaming: (v) => set({ enableStreaming: v }),
       setStreamingSpeed: (v) => set({ streamingSpeed: Math.max(1, Math.min(100, v)) }),
+      setGameTextSpeed: (v) => set({ gameTextSpeed: Math.max(1, Math.min(100, v)) }),
+      setGameAutoPlayDelay: (v) => set({ gameAutoPlayDelay: Math.max(200, Math.min(10000, Math.round(v))) }),
       setDebugMode: (v) => set({ debugMode: v }),
       setMessageGrouping: (v) => set({ messageGrouping: v }),
       setShowTimestamps: (v) => set({ showTimestamps: v }),
@@ -568,6 +587,7 @@ export const useUIStore = create<UIState>()(
       setCustomConversationPrompt: (v) => set({ customConversationPrompt: v }),
       setEnterToSendRP: (v) => set({ enterToSendRP: v }),
       setEnterToSendConvo: (v) => set({ enterToSendConvo: v }),
+      setEnterToSendGame: (v) => set({ enterToSendGame: v }),
       setWeatherEffects: (v) => set({ weatherEffects: v }),
       setHudPosition: (v) => set({ hudPosition: v }),
       setHasMigratedCustomThemesToServer: (v) => set({ hasMigratedCustomThemesToServer: v }),
@@ -593,6 +613,7 @@ export const useUIStore = create<UIState>()(
           installedExtensions: s.installedExtensions.map((e) => (e.id === id ? { ...e, enabled: !e.enabled } : e)),
         })),
       setHasCompletedOnboarding: (v) => set({ hasCompletedOnboarding: v }),
+      setGameTutorialDisabled: (v) => set({ gameTutorialDisabled: v }),
       dismissLinkApiBanner: () => set({ linkApiBannerDismissed: true }),
       toggleEchoChamber: () => set((s) => ({ echoChamberOpen: !s.echoChamberOpen })),
       setEchoChamberSide: (side) => set({ echoChamberSide: side }),
@@ -728,6 +749,7 @@ export const useUIStore = create<UIState>()(
         convoGradientTo: state.convoGradientTo,
         enterToSendRP: state.enterToSendRP,
         enterToSendConvo: state.enterToSendConvo,
+        enterToSendGame: state.enterToSendGame,
         weatherEffects: state.weatherEffects,
         hudPosition: state.hudPosition,
         hasMigratedCustomThemesToServer: state.hasMigratedCustomThemesToServer,

@@ -258,6 +258,77 @@ Agents are AI sub-systems that run alongside the main generation in phases:
 - Agents have their own system prompts and can use separate models/connections
 - Configured in the Agents panel (right sidebar → sparkles icon)
 
+## Game Mode 🎮 (Roleplay only)
+Game Mode turns a roleplay chat into a JRPG-flavored session with a proper game loop. The user's chosen model acts as the **GM** and narrates, while the engine handles the mechanics.
+
+### Enabling Game Mode
+- Enable it on a roleplay chat via the Game Setup Wizard (accessible from the chat's settings drawer, or auto-prompted when a new roleplay chat is created with game mode toggled on).
+- The wizard collects: genre, setting, tone, difficulty, **party character IDs** (which characters fight alongside the player), the player's persona, and starting location.
+- Once enabled, the chat gets a GameSurface overlay with background, sprites, party cards, HUD, and input.
+
+### State Machine
+The game is always in one of four **active states**, stored in \`chatMeta.gameActiveState\`:
+- **exploration** — default; free-form movement, choices, ambient music
+- **dialogue** — focused NPC conversation; dialogue-specific tags available
+- **combat** — tactical battle UI is mounted (see below)
+- **travel_rest** — overland travel or camping; different music and pacing
+
+Transitions are driven by the GM emitting \`[state: exploration|dialogue|combat|travel_rest]\` in their message. The engine validates transitions server-side.
+
+### GM Tags (What the Model Outputs)
+The GM's messages carry structured tags the engine parses and strips from the display. Available tags depend on the current state. Key ones:
+- \`[state: ...]\` — transition to a new game state
+- \`[combat: enemies="Name:Level:HP:ATK:DEF:SPD:Element, ..."]\` — start a tactical battle (MUST pair with \`[state: combat]\`)
+- \`[element_attack: element="pyro" target="Goblin"]\` — narrative elemental strike (triggers reaction popup)
+- \`[qte: action1 | action2 | action3, timer: 5s]\` — quick-time event for the player
+- \`[choices: ...]\` — branching choice prompt
+- \`[dialogue: npc="Name"]\` — hand off to an NPC speaker
+- \`[reputation: npc="Name", delta=+5, reason="..."]\` — adjust NPC reputation
+- \`[widget: ...]\` — HUD widget updates (stats, inventory, quest, stat_block)
+- \`[map_update: ...]\`, \`[direction: ...]\` — world map updates & directional movement
+- \`[skill_check: ...]\`, \`[dice: ...]\` — skill checks and dice rolls (engine resolves)
+- \`[encounter: ...]\` — trigger a random encounter
+- \`[session_end: reason="..."]\` — end the current session
+- Readable: \`[Note: ...]\` and \`[Book: ...]\` — rendered inline as journal-style notes
+
+### Tactical Combat
+When the GM emits \`[combat: ...] [state: combat]\`, the engine builds party combatants from the character snapshot + persona stats and mounts the **GameCombatUI** — a turn-based, JRPG-flavored battle screen with:
+- Party and enemies arrayed with HP/MP bars, elemental aura, status effects
+- Intro → player-turn → target-select → animating → victory/defeat/flee phases
+- Server-resolved rounds via \`POST /game/combat/round\` (handles damage, elemental reactions, status effects, morale)
+- Loot drops generated on victory via \`POST /game/combat/loot\`
+- On end, the UI sends a \`[combat_result]...[/combat_result]\` block back to the GM with the authoritative outcome — rounds played, defeated enemies, party HP/KO/status effects, loot. The GM narrates the aftermath grounded in that block (no inventing extra damage or casualties).
+- State auto-transitions back to \`exploration\` when combat ends.
+
+### Auto-Journal
+Every significant event is logged to \`gameJournal\` on the chat:
+- Locations visited, NPCs met and interactions
+- Combat outcomes (with rounds, defeated enemies, party status, loot folded into the description)
+- Quests (active/completed/failed) with objectives
+- Inventory acquire/use/lose events
+- Freeform notes and events
+Displayed in the in-game Journal panel — no LLM summarization needed, it's structured data.
+
+### Systems & Services
+- **Encounters**: random or scripted, triggered by location/time/state
+- **Dice & Skill Checks**: server-side roll resolution, results fed back to GM as tags
+- **Reputation**: per-NPC track with milestone thresholds
+- **Morale**: enemies may flee when outmatched
+- **Elemental Reactions**: pyro/hydro/electro/cryo/geo/anemo/dendro chains with reaction bonuses
+- **Weather & Time**: driven by the World State agent; affects music, particles, lighting
+- **Perception**: stealth / notice checks
+- **Music & Ambient**: auto-scored from game state (DO NOT output \`[music:]\` tags as the GM)
+- **Sidecar**: a local scene analyzer can also emit state changes & game tags
+
+### Starting a Game for the User
+If the user wants to play a game, DON'T just tell them to click around — walk them through it:
+1. Ask what **genre, setting, tone, and difficulty** they want (e.g., "dark fantasy, low magic, gritty, hard")
+2. Ask which **characters** should be in the party (fetch them if needed to see what's available)
+3. Ask which **persona** they're playing as
+4. Create a roleplay chat with those characters: \`[create_chat: character="Name", mode="roleplay"]\`
+5. Tell them to open the Game Setup Wizard in that chat's settings drawer and fill in the config you agreed on — or to toggle Game Mode on if it's not already.
+You can't start Game Mode directly via an assistant command — the wizard is the source of truth — but you CAN prep the perfect chat and brief them on exactly what to type into each field.
+
 ## Navigation
 - **Sidebar** (left): All chats, search, + button to create new chats
 - **Right Panel** (top bar buttons): Characters, Lorebooks, Presets, Connections, Agents, Personas, Settings

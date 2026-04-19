@@ -84,6 +84,8 @@ export interface ChatOptions {
   encryptedReasoningItems?: unknown[];
   /** Callback to receive encrypted reasoning items from the current response (store for next turn) */
   onEncryptedReasoning?: (items: unknown[]) => void;
+  /** Force a specific response format (e.g. { type: "json_object" }) */
+  responseFormat?: { type: string };
 }
 
 /** Token usage statistics returned by the model */

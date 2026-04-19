@@ -31,12 +31,12 @@ const STEPS: TourStep[] = [
   {
     target: null,
     title: "Welcome to Marinara Engine!",
-    body: "Hi! Here's a quick tutorial to show you around. Confident in your skill? Feel free to skip it!\n\n**Warning:** skipping the tutorial will make me sad.",
+    body: "Howdy! Here's a quick tutorial to show you around. Confident in your skill? Feel free to skip it!\n\n**Warning:** skipping the tutorial will make me cry.",
     sprite: { src: "/sprites/mari/Mari_wave.png" },
   },
   {
     target: "sidebar-toggle",
-    title: "Chat Sidebar",
+    title: "Chats Sidebar",
     body: "This is where all your conversations live. Create new chats, search through them, and organize your history. You can have as many chats as you want!",
     side: "right",
     sprite: { src: "/sprites/mari/Mari_point_middle_left.png" },
@@ -44,27 +44,27 @@ const STEPS: TourStep[] = [
   {
     target: "panel-buttons",
     title: "Tab Buttons",
-    body: "These buttons open panels on the right for Browser, Characters, Lorebooks, Presets, Connections, Agents, Persona, and Settings. Everything you need is one click away!",
+    body: "These buttons (from left to right) open panels for:\n- **Browser:** browse for downloadable cards and more,\n- **Characters:** view and manage all your character cards,\n- **Lorebooks:** lorebooks with all the information you want,\n- **Presets:** section for prompts,\n- **Connections:** Set up your API connection here,\n- **Agents:** Think of them as extensions to your chats, each agent does something atop your main conversation, e.g., tracks details, creates images, etc.,\n- **Persona:** personas you play as,\n- **Settings:** settings for the entire application.\n\nCheck them all out!",
     side: "bottom",
     sprite: { src: "/sprites/mari/Mari_point_up_left.png", flip: true },
   },
   {
     target: "chat-area",
     title: "Chat Area",
-    body: "This is your main workspace — where you chat with AI characters, enjoy roleplay, and read generated stories. Messages appear here in real time.",
+    body: "This is your main workspace, where you chat with AI characters, enjoy roleplay, and read generated stories. Messages appear here in real time.",
     side: "left",
     sprite: { src: "/sprites/mari/Mari_point_middle_left.png" },
   },
   {
     target: null,
-    title: "Two Ways to Chat",
-    body: "Marinara Engine has two chat modes:\n\n**Conversation** 💬 — Like Discord DMs. Casual texting, character schedules, statuses, and autonomous messaging. Great for slice-of-life and hanging out.\n\n**Roleplay** 🎭 — Creative writing and storytelling. Rich narration, AI agents, game HUD, quests, and more. Perfect for adventures and immersive stories.",
+    title: "Three Ways to Chat",
+    body: "Marinara Engine has three chat modes:\n\n**Conversation:** Like Discord DMs. Casual texting, character schedules, statuses, and autonomous messaging. Great for slice-of-life and hanging out.\n\n**Roleplay:** Creative writing and storytelling. Rich narration, AI agents that handle tracking, narrative, and more. Perfect for adventures and immersive stories.\n\n**Game:** An RPG-flavored visual novel layer on top of your story, directed by an AI Game Master. Visual effects, tactical combat, party management, a developed plot line, and more. The most immersive experience out of all the available ones.\n\nUpon selecting any of these options, you will be presented with a setup wizard, so don't worry about anything, we'll guide you through the process step by step!",
     sprite: { src: "/sprites/mari/Mari_explaining.png" },
   },
   {
     target: null,
     title: "Meet Professor Mari!",
-    body: "That's me! I'm your built-in assistant — I come pre-installed and I'm always here to help. You can message me anytime to ask questions about the app, and I can even **do things for you** — like create characters, personas, start new chats, and navigate the app.\n\nI've set up a chat with me in the sidebar already — feel free to ask me anything after the tour!",
+    body: "That's me! I'm your built-in assistant. I come pre-installed and I'm always here to help. You can message me anytime to ask questions about the app, and I can even **do things for you:** like create characters, personas, start new chats, and navigate the app.\n\nI've set up a chat with me in the Chats sidebar already. Feel free to ask me anything after the tour!",
     sprite: { src: "/sprites/mari/Mari_greet.png" },
   },
   {
@@ -84,7 +84,7 @@ const STEPS: TourStep[] = [
   {
     target: null,
     title: "You're All Set!",
-    body: "Look for the (?) icons throughout the app — hover over them anytime to learn what each option does. Have fun exploring!",
+    body: "Look for the (?) icons throughout the app. Hover over them at any time to learn what each option does. Have fun exploring!\n\nAnd if you have any further questions, need help, or want to report a bug, feel free to join our Discord server! You can find the invite link on the home page.",
     sprite: { src: "/sprites/mari/Mari_greet.png" },
   },
 ];

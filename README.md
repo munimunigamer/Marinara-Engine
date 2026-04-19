@@ -46,21 +46,45 @@
 </p>
 
 <p align="center">
+  <img src="docs/screenshots/Browser_Game_Screen.png" width="90%" alt="Game Mode — Scene" />
+  <br/>
+  <em>Game Mode — AI Game Master, party of characters, generated backgrounds, weather, and time of day</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/Browser_Game_Dialogue.png" width="45%" alt="Game Dialogue" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/Browser_Game_Party_Card.png" width="45%" alt="Party Card" />
+</p>
+<p align="center">
+  <em>NPC dialogue tracking &nbsp;&nbsp;·&nbsp;&nbsp; Party member card with stats, levels, and abilities</em>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/Mobile_Group_Conversation.png" width="30%" alt="Mobile Group Conversation" />
   &nbsp;&nbsp;&nbsp;&nbsp;
   <img src="docs/screenshots/Mobile_Roleplay_View.png" width="30%" alt="Mobile Roleplay" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/screenshots/Game_Mobile_Screen.png" width="30%" alt="Mobile Game Mode" />
 </p>
 <p align="center">
-  <em>Fully responsive — works on phones and tablets via PWA</em>
+  <em>Fully responsive — Conversations, Roleplay, and Game Mode all work on phones and tablets via PWA</em>
 </p>
 
 ---
 
 ## Latest Release
 
-Current stable release: **[v1.4.8](https://github.com/Pasta-Devs/Marinara-Engine/releases/tag/v1.4.8)**.
+Current stable release: **[v1.5.0](https://github.com/Pasta-Devs/Marinara-Engine/releases/tag/v1.5.0)**.
 
 Detailed release notes now live in [CHANGELOG.md](CHANGELOG.md). Tagged releases use the `vX.Y.Z` format, and GitHub Releases remain the publication mechanism for installers, release notes, and update metadata.
+
+## Plans
+
+- Adding Marinara Engine as a free-to-download app on both Android and iPhone mobiles.
+- An engine feature allowing you to set up full games with your curated sprites, soundtracks, scenarios, etc., and share them with others.
+- Different supported game modes, including more tabletop-like gameplay, point-and-click games, and classic text adventures.
+- Overall improvements and addressing any bugs that pop up along the way.
 
 ## Project Docs
 
@@ -75,7 +99,7 @@ Detailed release notes now live in [CHANGELOG.md](CHANGELOG.md). Tagged releases
 
 ### Windows Easiest Method
 
-Download **[Marinara-Engine-Installer-1.4.8.exe](https://github.com/Pasta-Devs/Marinara-Engine/releases/download/v1.4.8/Marinara-Engine-Installer-1.4.8.exe)** from the [Releases](https://github.com/Pasta-Devs/Marinara-Engine/releases) page and run it. The installer checks for Node.js and Git, clones the repo, installs dependencies, builds the app, and creates a desktop shortcut.
+Download **[Marinara-Engine-Installer-1.5.0.exe](https://github.com/Pasta-Devs/Marinara-Engine/releases/download/v1.5.0/Marinara-Engine-Installer-1.5.0.exe)** from the [Releases](https://github.com/Pasta-Devs/Marinara-Engine/releases) page and run it. The installer checks for Node.js and Git, clones the repo, installs dependencies, builds the app, and creates a desktop shortcut.
 
 ### Run from Source (All Platforms)
 
@@ -474,6 +498,7 @@ Look for `marinara-engine.db` plus any `-wal` and `-shm` companion files. The se
 - [Andy Mauragis](https://github.com/amauragis)
 - [LukaTheHero](https://github.com/LukaTheHero)
 - [TheLonelyDevil9](https://github.com/TheLonelyDevil9)
+- [Ailthrim](https://github.com/joshellis625)
 
 ---
 

@@ -155,6 +155,17 @@ if not exist "packages\client\dist" (
     call pnpm build:client
 )
 
+:: Sidecar (local model) - rebuild native addon if user has a model downloaded
+if exist "packages\server\data\models\sidecar-config.json" (
+    set "LLAMA_ADDON_FOUND="
+    for /f "delims=" %%F in ('dir /s /b "node_modules\.pnpm\*llama-addon.node" 2^>nul') do set "LLAMA_ADDON_FOUND=1"
+    if not defined LLAMA_ADDON_FOUND (
+        echo  [..] Building sidecar native addon ^(first time, may take a few minutes^)...
+        call pnpm sidecar:build
+        echo  [OK] Sidecar addon built
+    )
+)
+
 :: Database migrations are handled automatically at server startup by runMigrations()
 
 :: Load .env if present (respects user overrides)

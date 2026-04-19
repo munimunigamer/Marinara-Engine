@@ -18,6 +18,8 @@ import {
   FolderPlus,
   ChevronRight,
   GripVertical,
+  CheckSquare,
+  Square as SquareIcon,
 } from "lucide-react";
 import { useChats, useCreateChat, useDeleteChat, useDeleteChatGroup } from "../../hooks/use-chats";
 import { useConnections } from "../../hooks/use-connections";
@@ -45,7 +47,7 @@ const MODE_CONFIG: Record<
   conversation: {
     icon: <MessageSquare size="0.875rem" />,
     label: "Conversation",
-    shortLabel: "Chat",
+    shortLabel: "CONVO",
     bg: "linear-gradient(135deg, #4de5dd, #3ab8b1)",
     description: "A straightforward AI conversation — no roleplay elements.",
   },
@@ -58,11 +60,18 @@ const MODE_CONFIG: Record<
   },
   visual_novel: {
     icon: <Theater size="0.875rem" />,
-    label: "Game",
-    shortLabel: "GM",
+    label: "Visual Novel",
+    shortLabel: "VN",
     bg: "linear-gradient(135deg, #e15c8c, #c94776)",
     description: "A full game experience with backgrounds, sprites, text boxes, and choices.",
     comingSoon: true,
+  },
+  game: {
+    icon: <Theater size="0.875rem" />,
+    label: "Game",
+    shortLabel: "GM",
+    bg: "linear-gradient(135deg, #e15c8c, #c94776)",
+    description: "AI-managed singleplayer RPG with a Game Master, party, dice, maps, and quests.",
   },
 };
 
@@ -109,7 +118,7 @@ export function ChatSidebar() {
     return map;
   }, [allCharacters]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"conversation" | "roleplay">("conversation");
+  const [activeTab, setActiveTab] = useState<"conversation" | "roleplay" | "game">("conversation");
   const [deleteTarget, setDeleteTarget] = useState<{
     chatId: string;
     groupId: string | null;
@@ -121,8 +130,34 @@ export function ChatSidebar() {
   const [newFolderName, setNewFolderName] = useState("");
   const [movingChatId, setMovingChatId] = useState<string | null>(null);
 
+  // Multi-select state
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set());
+
+  const toggleSelectChat = useCallback((chatId: string) => {
+    setSelectedChatIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(chatId)) next.delete(chatId);
+      else next.add(chatId);
+      return next;
+    });
+  }, []);
+
+  const exitMultiSelect = useCallback(() => {
+    setMultiSelectMode(false);
+    setSelectedChatIds(new Set());
+  }, []);
+
+  // Exit multi-select when switching tabs
+  useEffect(() => {
+    exitMultiSelect();
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const filtered = chats?.filter(
-    (c) => c.name.toLowerCase().includes(searchQuery.toLowerCase()) && c.mode === activeTab,
+    (c) =>
+      c.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+      c.mode === activeTab &&
+      !(c.mode === "conversation" && c.metadata?.gameId),
   );
 
   // ── Collapse chats that share a groupId into one entry ──
@@ -278,6 +313,10 @@ export function ChatSidebar() {
         return;
       }
 
+      // Close any open detail editors so the chat area is visible
+      if (hasAnyDetailOpen()) {
+        closeAllDetails();
+      }
       createChat.mutate(
         { name: `New ${MODE_CONFIG[mode]?.label ?? mode}`, mode, characterIds: [] },
         {
@@ -289,7 +328,7 @@ export function ChatSidebar() {
         },
       );
     },
-    [connections, createChat, setActiveChatId, setPendingNewChatMode],
+    [connections, createChat, setActiveChatId, setPendingNewChatMode, hasAnyDetailOpen, closeAllDetails],
   );
 
   const handleNewChatFromTab = useCallback(() => {
@@ -344,10 +383,35 @@ export function ChatSidebar() {
     [moveChatMut],
   );
 
+  // ── Batch actions ──
+  const [batchMovingFolder, setBatchMovingFolder] = useState(false);
+
+  const handleBatchDelete = useCallback(() => {
+    if (selectedChatIds.size === 0) return;
+    if (!confirm(`Delete ${selectedChatIds.size} chat${selectedChatIds.size > 1 ? "s" : ""}?`)) return;
+    for (const id of selectedChatIds) {
+      deleteChat.mutate(id);
+    }
+    if (activeChatId && selectedChatIds.has(activeChatId)) setActiveChatId(null);
+    exitMultiSelect();
+  }, [selectedChatIds, deleteChat, activeChatId, setActiveChatId, exitMultiSelect]);
+
+  const handleBatchMoveToFolder = useCallback(
+    (folderId: string | null) => {
+      for (const id of selectedChatIds) {
+        moveChatMut.mutate({ chatId: id, folderId });
+      }
+      setBatchMovingFolder(false);
+      exitMultiSelect();
+    },
+    [selectedChatIds, moveChatMut, exitMultiSelect],
+  );
+
   // ── Chat row renderer (shared between unfiled + folder sections) ──
   const renderChatRow = ({ chat, branchCount }: (typeof displayChats)[number]) => {
     const cfg = MODE_CONFIG[chat.mode] ?? MODE_CONFIG.conversation;
     const isActive = activeChatId === chat.id || (chat.groupId != null && chat.groupId === activeGroupId);
+    const isSelected = selectedChatIds.has(chat.id);
     return (
       <div
         role="button"
@@ -355,6 +419,10 @@ export function ChatSidebar() {
         key={chat.groupId ?? chat.id}
         data-chat-id={chat.id}
         onClick={() => {
+          if (multiSelectMode) {
+            toggleSelectChat(chat.id);
+            return;
+          }
           if (hasAnyDetailOpen()) {
             if (editorDirty) {
               if (!window.confirm("You have unsaved changes. Discard and continue?")) return;
@@ -367,9 +435,24 @@ export function ChatSidebar() {
         }}
         className={cn(
           "group relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-all duration-150",
-          isActive ? "bg-[var(--sidebar-accent)] shadow-sm" : "hover:bg-[var(--sidebar-accent)]/60",
+          multiSelectMode && isSelected
+            ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30"
+            : isActive
+              ? "bg-[var(--sidebar-accent)] shadow-sm"
+              : "hover:bg-[var(--sidebar-accent)]/60",
         )}
       >
+        {/* Multi-select checkbox */}
+        {multiSelectMode && (
+          <div className="shrink-0 text-[var(--primary)]">
+            {isSelected ? (
+              <CheckSquare size="0.875rem" />
+            ) : (
+              <SquareIcon size="0.875rem" className="text-[var(--muted-foreground)]" />
+            )}
+          </div>
+        )}
+
         {/* Active indicator */}
         {isActive && (
           <span
@@ -501,12 +584,14 @@ export function ChatSidebar() {
         )}
 
         {/* Mode badge on hover */}
-        <span className="shrink-0 text-[0.625rem] text-[var(--muted-foreground)] opacity-0 transition-opacity group-hover:opacity-100 max-md:opacity-100">
-          {cfg.shortLabel}
-        </span>
+        {!multiSelectMode && (
+          <span className="shrink-0 text-[0.625rem] text-[var(--muted-foreground)] opacity-0 transition-opacity group-hover:opacity-100 max-md:opacity-100">
+            {cfg.shortLabel}
+          </span>
+        )}
 
         {/* Move to folder */}
-        {modeFolders.length > 0 && (
+        {!multiSelectMode && modeFolders.length > 0 && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -520,22 +605,24 @@ export function ChatSidebar() {
         )}
 
         {/* Delete button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (branchCount > 1 && chat.groupId) {
-              setDeleteTarget({ chatId: chat.id, groupId: chat.groupId, branchCount });
-            } else {
-              if (confirm("Delete this chat?")) {
-                deleteChat.mutate(chat.id);
-                if (activeChatId === chat.id) setActiveChatId(null);
+        {!multiSelectMode && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (branchCount > 1 && chat.groupId) {
+                setDeleteTarget({ chatId: chat.id, groupId: chat.groupId, branchCount });
+              } else {
+                if (confirm("Delete this chat?")) {
+                  deleteChat.mutate(chat.id);
+                  if (activeChatId === chat.id) setActiveChatId(null);
+                }
               }
-            }
-          }}
-          className="shrink-0 rounded-md p-1 opacity-0 transition-all hover:bg-[var(--destructive)]/20 group-hover:opacity-100 max-md:opacity-100"
-        >
-          <Trash2 size="0.75rem" className="text-[var(--destructive)]" />
-        </button>
+            }}
+            className="shrink-0 rounded-md p-1 opacity-0 transition-all hover:bg-[var(--destructive)]/20 group-hover:opacity-100 max-md:opacity-100"
+          >
+            <Trash2 size="0.75rem" className="text-[var(--destructive)]" />
+          </button>
+        )}
       </div>
     );
   };
@@ -550,7 +637,7 @@ export function ChatSidebar() {
           <button
             onClick={handleNewChatFromTab}
             className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-all hover:bg-[var(--sidebar-accent)] hover:text-[var(--primary)] active:scale-90"
-            title={`New ${activeTab === "conversation" ? "Conversation" : "Roleplay"}`}
+            title={`New ${activeTab === "conversation" ? "Conversation" : activeTab === "game" ? "Game" : "Roleplay"}`}
           >
             <Plus size="1rem" />
           </button>
@@ -566,7 +653,7 @@ export function ChatSidebar() {
 
       {/* Tabs */}
       <div className="flex items-center gap-1 px-3 pt-2">
-        {(["conversation", "roleplay"] as const).map((tab) => {
+        {(["conversation", "roleplay", "game"] as const).map((tab) => {
           const cfg = MODE_CONFIG[tab];
           const isActive = activeTab === tab;
           const tabUnread =
@@ -584,7 +671,7 @@ export function ChatSidebar() {
             >
               <span className="shrink-0 leading-none">{cfg.icon}</span>
               <span className="inline-flex min-h-[1rem] items-center whitespace-nowrap pb-px leading-normal">
-                {cfg.label}s
+                {cfg.shortLabel}
               </span>
               {tabUnread > 0 && !isActive && (
                 <span className="absolute -top-1 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[0.5rem] font-bold leading-none text-white">
@@ -602,7 +689,7 @@ export function ChatSidebar() {
           <Search size="0.8125rem" className="text-[var(--muted-foreground)]" />
           <input
             type="text"
-            placeholder={`Search ${activeTab === "conversation" ? "conversations" : "roleplays"}...`}
+            placeholder={`Search ${activeTab === "conversation" ? "conversations" : activeTab === "game" ? "games" : "roleplays"}...`}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="flex-1 bg-transparent text-xs text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none"
@@ -625,18 +712,20 @@ export function ChatSidebar() {
             <div className="animate-float flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--secondary)]">
               {activeTab === "conversation" ? (
                 <MessageSquare size="1.25rem" className="text-[var(--muted-foreground)]" />
+              ) : activeTab === "game" ? (
+                <Theater size="1.25rem" className="text-[var(--muted-foreground)]" />
               ) : (
                 <BookOpen size="1.25rem" className="text-[var(--muted-foreground)]" />
               )}
             </div>
             <p className="text-xs text-[var(--muted-foreground)]">
-              No {activeTab === "conversation" ? "conversations" : "roleplays"} yet
+              No {activeTab === "conversation" ? "conversations" : activeTab === "game" ? "games" : "roleplays"} yet
             </p>
             <button
               onClick={handleNewChatFromTab}
               className="mt-1 rounded-lg bg-[var(--primary)]/15 px-3 py-1.5 text-[0.6875rem] font-medium text-[var(--primary)] transition-all hover:bg-[var(--primary)]/25"
             >
-              + New {activeTab === "conversation" ? "Conversation" : "Roleplay"}
+              + New {activeTab === "conversation" ? "Conversation" : activeTab === "game" ? "Game" : "Roleplay"}
             </button>
           </div>
         )}
@@ -669,13 +758,29 @@ export function ChatSidebar() {
               />
             </div>
           ) : (
-            <button
-              onClick={() => setCreatingFolder(true)}
-              className="flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-[var(--muted-foreground)] transition-all hover:bg-[var(--sidebar-accent)]/40 hover:text-[var(--foreground)]"
-            >
-              <FolderPlus size="0.75rem" />
-              New Folder
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCreatingFolder(true)}
+                className="flex flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-[var(--muted-foreground)] transition-all hover:bg-[var(--sidebar-accent)]/40 hover:text-[var(--foreground)]"
+              >
+                <FolderPlus size="0.75rem" />
+                New Folder
+              </button>
+              {displayChats.length > 0 && (
+                <button
+                  onClick={() => (multiSelectMode ? exitMultiSelect() : setMultiSelectMode(true))}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.6875rem] transition-all",
+                    multiSelectMode
+                      ? "bg-[var(--primary)]/15 text-[var(--primary)]"
+                      : "text-[var(--muted-foreground)] hover:bg-[var(--sidebar-accent)]/40 hover:text-[var(--foreground)]",
+                  )}
+                >
+                  <CheckSquare size="0.75rem" />
+                  {multiSelectMode ? "Cancel" : "Select"}
+                </button>
+              )}
+            </div>
           )}
 
           {/* Folders (drag-to-reorder) */}
@@ -710,6 +815,35 @@ export function ChatSidebar() {
           {unfiledChats.map(renderChatRow)}
         </div>
       </div>
+
+      {/* ── Multi-select action bar ── */}
+      {multiSelectMode && (
+        <div className="border-t border-[var(--border)]/30 bg-[var(--card)]/95 px-3 py-2.5 backdrop-blur-sm">
+          <div className="mb-2 text-center text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+            {selectedChatIds.size} selected
+          </div>
+          <div className="flex gap-2">
+            {modeFolders.length > 0 && (
+              <button
+                onClick={() => setBatchMovingFolder(true)}
+                disabled={selectedChatIds.size === 0}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs font-medium transition-all hover:bg-[var(--accent)] disabled:opacity-40"
+              >
+                <FolderOpen size="0.75rem" />
+                Move
+              </button>
+            )}
+            <button
+              onClick={handleBatchDelete}
+              disabled={selectedChatIds.size === 0}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[var(--destructive)]/10 px-3 py-2 text-xs font-medium text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/20 disabled:opacity-40"
+            >
+              <Trash2 size="0.75rem" />
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── User Status Selector ── */}
       <UserStatusFooter />
@@ -787,6 +921,34 @@ export function ChatSidebar() {
             ))}
           </div>
         )}
+      </Modal>
+
+      {/* ── Batch Move to Folder Modal ── */}
+      <Modal
+        open={batchMovingFolder}
+        onClose={() => setBatchMovingFolder(false)}
+        title={`Move ${selectedChatIds.size} Chat${selectedChatIds.size !== 1 ? "s" : ""} to Folder`}
+        width="max-w-xs"
+      >
+        <div className="flex flex-col gap-1">
+          <button
+            onClick={() => handleBatchMoveToFolder(null)}
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs transition-all hover:bg-[var(--accent)]"
+          >
+            <MessageSquare size="0.75rem" className="text-[var(--muted-foreground)]" />
+            Unfiled
+          </button>
+          {modeFolders.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => handleBatchMoveToFolder(f.id)}
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs transition-all hover:bg-[var(--accent)]"
+            >
+              <div className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: f.color || "#6b7280" }} />
+              {f.name}
+            </button>
+          ))}
+        </div>
       </Modal>
     </nav>
   );

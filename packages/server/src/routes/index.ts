@@ -37,14 +37,19 @@ import { botBrowserChartavernRoutes } from "./bot-browser-chartavern.routes.js";
 import { botBrowserPygmalionRoutes } from "./bot-browser-pygmalion.routes.js";
 import { botBrowserWyvernRoutes } from "./bot-browser-wyvern.routes.js";
 import { chatFoldersRoutes } from "./chat-folders.routes.js";
+import { chatPresetsRoutes } from "./chat-presets.routes.js";
 import { updatesRoutes } from "./updates.routes.js";
 import { themesRoutes } from "./themes.routes.js";
 import { appSettingsRoutes } from "./app-settings.routes.js";
 import { worldGraphRoutes } from "./world-graph.routes.js";
+import { gameRoutes } from "./game.routes.js";
+import { gameAssetsRoutes } from "./game-assets.routes.js";
+import { sidecarRoutes } from "./sidecar.routes.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await app.register(chatsRoutes, { prefix: "/api/chats" });
   await app.register(chatFoldersRoutes, { prefix: "/api/chat-folders" });
+  await app.register(chatPresetsRoutes, { prefix: "/api/chat-presets" });
   await app.register(charactersRoutes, { prefix: "/api/characters" });
   await app.register(lorebooksRoutes, { prefix: "/api/lorebooks" });
   await app.register(promptsRoutes, { prefix: "/api/prompts" });
@@ -81,5 +86,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(updatesRoutes, { prefix: "/api/updates" });
   await app.register(themesRoutes, { prefix: "/api/themes" });
   await app.register(appSettingsRoutes, { prefix: "/api/app-settings" });
+  await app.register(gameRoutes, { prefix: "/api/game" });
+  await app.register(gameAssetsRoutes, { prefix: "/api/game-assets" });
+  await app.register(sidecarRoutes, { prefix: "/api/sidecar" });
   await app.register(worldGraphRoutes, { prefix: "/api/world-graph" });
 }

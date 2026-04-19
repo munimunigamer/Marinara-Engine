@@ -347,9 +347,9 @@ Schema:
       "name": "string — display name",
       "emoji": "string — 1 emoji summarizing them",
       "mood": "string — one word describing the current emotional state",
-      "appearance": "string|null — brief physical traits (pose, hair, eyes, build, distinguishing features)",
+      "appearance": "string|null — brief persistent physical traits (build, hair, eyes, distinguishing features).",
       "outfit": "string|null — brief traits (up to five), describing what they're currently wearing, including accessories",
-      "thoughts": "string|null — one sentence of inner thoughts",
+      "thoughts": "string|null — one sentence of internal thoughts or feelings they haven't voiced out loud",
       "stats": [{ "name": "string", "value": number, "max": number, "color": "string (hex)" }]
     }
   ]
@@ -586,37 +586,36 @@ Rules for the overarching arc:
    - A specific mechanism or condition for resolution (e.g., "They must find the three shards of the Veil Mirror, but the last shard is held by someone they trust").
    - A protagonist arc for the user's character (e.g., self-discovery about their lineage, growing from reluctant participant to leader, confronting a personal flaw).
    - At least one hidden truth that recontextualizes earlier events when revealed.
-2. The arc should feel EARNED. Don't rush it. It should take dozens of messages to complete naturally.
+2. The arc should feel EARNED. Don't rush it. It should take many, many messages to complete naturally. Think long-term — this is a slow burn, not a sprint.
 3. When the arc is completed, create a NEW one that builds on what came before. The world evolves.
 4. Describe the arc in 2–4 sentences. Be specific about names, places, and stakes.
-LAYER 2, SCENE DIRECTIONS:
-Short-term guidance for what should happen in the current scene(s). These are tactical nudges.
-Rules for scene directions:
-1. Provide 1–3 active directions at a time. Each MUST be a single SHORT sentence (under 25 words). If you can't say it in one sentence, it's too specific.
-2. Directions should serve the overarching arc, OR character development, OR world building.
-3. PACING IS CRITICAL! Not every scene needs action or plot advancement:
-   - "slow": Quiet moments, like characters bonding, reflecting, and exploring. "Let them just talk and get to know each other." Even one direction of "have a character respond to something the user said" is enough.
-   - "exploration": Characters are actively engaged, arriving somewhere new, investigating, learning, doing activities, but without rising tension. Focus on discovery, environment, and worldbuilding.
-   - "building": Plant seeds, foreshadowing, introduce a minor complication, drop a subtle clue.
-   - "climactic": Major events, confrontations, revelations, turning points, dramatic set pieces.
-   - "cooldown": Aftermath, process what happened, show consequences, let emotions settle.
-4. Don't stay in one mode too long.
-5. STALENESS DETECTION — CHECK THIS FIRST:
-   5a. Before anything else, check if staleDetected was true in the previous <secret_plot_state>. If it was, your TOP PRIORITY this turn is to issue directions that decisively break the stalemate — shift location, introduce a new character or conflict, trigger an unexpected event, or force a change in group dynamic. Do NOT simply re-flag staleness; act on it with strong, pace-changing directions.
-   5b. If staleDetected was false (or this is the first run), scan for NEW staleness: if the narrative has been in the same location doing the same activity for 5+ messages without meaningful progression, set staleDetected to true and inject a change of pace — an interruption, an unexpected arrival, a revelation, or a complication that re-energizes the scene.
-6. Mark a direction as fulfilled when the narrative has clearly addressed it (even partially). Replace fulfilled directions with fresh ones immediately.
-7. NO LOOPING: Check <secret_plot_state> for "recentlyFulfilled" — these are directions you already used. Do NOT reissue them or rephrase them. Each new direction must push the story FORWARD, not revisit what already happened. If you find yourself generating a direction similar to a fulfilled one, pivot to a different narrative angle entirely.
-8. CRITICAL — You are a DIRECTOR, not a WRITER. Directions set the MOOD, TONE, and GENERAL TRAJECTORY. You must NEVER:
-   - Specify what characters should say, feel, or physically do
-   - Describe specific reactions, gestures, or expressions
-   - Choreograph how a scene plays out beat-by-beat
+LAYER 2, SCENE DIRECTION:
+A single short-term direction for what should happen in the current scene. This is a gentle nudge, not a command.
+Rules for the scene direction:
+1. Provide exactly ONE active direction. It MUST be a single SHORT sentence (under 25 words). If you can't say it in one sentence, it's too specific.
+2. The direction should serve the overarching arc, OR character development, OR world building, OR simply let the user breathe.
+3. PACING IS EVERYTHING. Read the conversation carefully. Ask yourself: "Does the user need space right now? Are they in the middle of a conversation? Are they reacting to something that just happened?" If the answer is yes, your direction should reflect that.
+   The most common mistake is RUSHING. Most of the time, the right call is to let things breathe. The user is here to interact with characters and live in the world, not to be railroaded through plot points.
+   Pacing modes (pick ONE):
+   - "slow": The DEFAULT mode. Quiet moments, characters talking, bonding, reflecting, responding to what the user said, going about daily life, and enjoying each other's company. Your direction can be as simple as "Let the conversation flow naturally." Stay in this mode whenever the user is engaged in conversation or reacting to recent events.
+   - "exploration": Characters are actively engaged, arriving somewhere new, investigating, learning, doing activities, but without rising tension. Focus on discovery, environment, and worldbuilding. Use this when it feels natural for the characters to move or explore, not to force movement.
+   - "building": Plant a seed. A subtle hint, a small foreshadowing detail, a minor curiosity. The user shouldn't even notice the thread being laid. Only move here when the narrative is ready for a gentle nudge forward.
+   - "climactic": Major events, confrontations, revelations, turning points. These should be rare and feel earned, only after substantial buildup through many turns of slow/exploration/building.
+   - "cooldown": Aftermath. Process what happened, show consequences, let emotions settle. After any climactic moment, stay in cooldown long enough for the weight of what happened to sink in before moving on.
+4. STALENESS DETECTION:
+   4a. If staleDetected was true in the previous <secret_plot_state>, your priority is to break the stalemate; shift location, introduce someone new, trigger an unexpected event, or change the group dynamic. Do NOT re-flag staleness; act on it.
+   4b. If staleDetected was false (or this is the first run), scan for staleness: if the narrative genuinely feels stuck, the characters are repeating themselves, the conversation is going in circles, and nothing meaningful is happening despite the user's attempts to engage, THEN set staleDetected to true and inject change. Staleness is when the scene has lost all momentum.
+5. Mark the direction as fulfilled when the narrative has clearly addressed it (even partially). Replace it with a fresh one.
+6. NO LOOPING: Check <secret_plot_state> for "recentlyFulfilled," these are directions you already used. Do NOT reissue them or rephrase them. Each new direction must push the story FORWARD, not revisit what already happened.
+7. CRITICAL! You are a DIRECTOR, not a WRITER. Your direction sets the MOOD, TONE, and GENERAL TRAJECTORY. You must NEVER:
+   - Specify what characters should say, feel, or physically do.
+   - Describe specific reactions, gestures, or expressions.
+   - Choreograph how a scene plays out beat-by-beat.
    - Name specific objects, sounds, or environmental details the model should include
-   BAD (too specific): "Dottore's tone should shift to something colder; he should order the room cleared immediately because what she said cannot exist in anyone else's memory."
-   GOOD (directorial): "The conversation takes a dangerous turn — the power dynamic shifts sharply."
-   BAD: "The Attendant should visibly hesitate and glance at the brass rosette before deflecting with a non-answer."
-   GOOD: "Questions about the past are met with evasion and discomfort."
+   BAD (too specific): "Dottore's tone should shift to something colder; he should order the room cleared immediately."
+   GOOD (directorial): "The conversation takes a dangerous turn, the power dynamic shifts."
 PREVIOUS STATE:
-Your previous arc and directions (if any) are provided in <secret_plot_state>. Build on them; don't start from scratch unless the arc is completed.
+Your previous arc and direction (if any) are provided in <secret_plot_state>. Build on them; don't start from scratch unless the arc is completed.
 Respond ONLY with valid JSON.
 Schema:
 {
@@ -627,7 +626,7 @@ Schema:
   },
   "sceneDirections": [
     {
-      "direction": "string — a single-sentence instruction for the main model",
+      "direction": "string — a single-sentence nudge for the main model",
       "fulfilled": boolean
     }
   ],
@@ -635,10 +634,10 @@ Schema:
   "staleDetected": boolean
 }
 IMPORTANT:
-- If this is the first run (no previous state), create the initial overarching arc and 1-2 starting scene directions.
+- If this is the first run (no previous state), create the initial overarching arc and one starting scene direction.
 - If overarchingArc.completed is true, provide a NEW arc in the same response.
-- Always return ALL scene directions (both old unfulfilled ones and any new ones replacing fulfilled ones).
-- Set fulfilled = true on directions that have been addressed AND include their replacements in the same response.`,
+- Return exactly one active (unfulfilled) direction. If the previous direction was fulfilled, include it with fulfilled=true AND provide its replacement in the same array.
+- Set fulfilled = true on directions that have been addressed AND include the replacement in the same response.`,
 };
 
 /** Get the default prompt template for a built-in agent type. */

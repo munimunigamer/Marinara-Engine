@@ -71,11 +71,14 @@ export function useEncounter() {
       // Mark active so the modal renders in loading state
       useEncounterStore.setState({ active: true });
 
+      const spellbookId = useEncounterStore.getState().spellbookId;
+
       try {
         const res = await api.post<EncounterInitResponse>("/encounter/init", {
           chatId: activeChatId,
           connectionId: null,
           settings,
+          spellbookId,
         });
         store.initCombat(res.combatState);
       } catch (err) {
@@ -123,6 +126,7 @@ export function useEncounter() {
       if (!activeChatId) return;
       if (useEncounterStore.getState().isProcessing) return;
       const { party, enemies, environment, playerActions, encounterLog, settings } = useEncounterStore.getState();
+      const spellbookId = useEncounterStore.getState().spellbookId;
 
       store.setProcessing(true);
       store.setError(null);
@@ -136,6 +140,7 @@ export function useEncounter() {
           playerActions,
           encounterLog,
           settings,
+          spellbookId,
         });
 
         const r = res.result;

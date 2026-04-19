@@ -229,7 +229,8 @@ async function importCharacterBuffer(
   } catch {
     return {
       success: false,
-      error: "Invalid file format. Expected a JSON character card, a PNG with embedded character data, or a .charx file.",
+      error:
+        "Invalid file format. Expected a JSON character card, a PNG with embedded character data, or a .charx file.",
     };
   }
 }

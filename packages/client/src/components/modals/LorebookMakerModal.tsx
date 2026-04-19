@@ -185,6 +185,7 @@ export function LorebookMakerModal({ open, onClose }: Props) {
   const handleSaveAsNew = async () => {
     if (!generated) return;
     setSaving(true);
+    setError(null);
     try {
       const result = await createLorebook.mutateAsync({
         name: generated.lorebook_name || "AI Generated Lorebook",
@@ -224,6 +225,8 @@ export function LorebookMakerModal({ open, onClose }: Props) {
       setSaved(false);
 
       if (lbId) openLorebookDetail(lbId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save lorebook");
     } finally {
       setSaving(false);
     }

@@ -363,6 +363,9 @@ async function applyRetryResultEffects(args: {
   agentContext: AgentContext;
   lorebooksStore: ReturnType<typeof createLorebooksStorage>;
   gameStateStore: ReturnType<typeof createGameStateStorage>;
+  conns: ReturnType<typeof createConnectionsStorage>;
+  chars: ReturnType<typeof createCharactersStorage>;
+  resolvedAgents: ResolvedRetryAgent[];
 }) {
   const {
     app,
@@ -375,6 +378,9 @@ async function applyRetryResultEffects(args: {
     agentContext,
     lorebooksStore,
     gameStateStore,
+    conns,
+    chars,
+    resolvedAgents,
   } = args;
   const sortedResults = [...results].sort(
     (a, b) => (a.type === "game_state_update" ? 0 : 1) - (b.type === "game_state_update" ? 0 : 1),
@@ -594,6 +600,188 @@ async function applyRetryResultEffects(args: {
         // Non-critical patching failure.
       }
     }
+
+    // ── ILLUSTRATOR: generate image from agent prompt ──
+    if (result.success && result.type === "image_prompt" && result.data && typeof result.data === "object") {
+      try {
+        const illData = result.data as Record<string, unknown>;
+        const shouldGenerate = illData.shouldGenerate === true;
+        const imagePrompt = ((illData.prompt as string) ?? "").trim();
+        const negativePrompt = ((illData.negativePrompt as string) ?? "").trim();
+        const style = ((illData.style as string) ?? "").trim();
+        const aspectRatio = ((illData.aspectRatio as string) ?? "portrait").trim();
+        const illCharacters = Array.isArray(illData.characters) ? (illData.characters as string[]) : [];
+
+        if (shouldGenerate && imagePrompt) {
+          const illustratorAgent = resolvedAgents.find(
+            (a) => a.resolved.id === result.agentId || a.resolved.type === "illustrator",
+          );
+          const imgConnId = (illustratorAgent?.resolved.settings?.imageConnectionId as string) ?? null;
+          if (imgConnId) {
+            const imgConnFull = await conns.getWithKey(imgConnId);
+            if (imgConnFull) {
+              const { generateImage, saveImageToDisk } = await import("../../services/image/image-generation.js");
+              const { createGalleryStorage } = await import("../../services/storage/gallery.storage.js");
+              const galleryStore = createGalleryStorage(app.db);
+
+              const imgModel = imgConnFull.model || "";
+              const imgBaseUrl = imgConnFull.baseUrl || "https://image.pollinations.ai";
+              const imgApiKey = imgConnFull.apiKey || "";
+
+              const chatMeta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
+              const selfieRes = (chatMeta.selfieResolution as string) ?? "";
+              const resParts = selfieRes.split("x").map(Number);
+              const parsedW = resParts[0] ?? 0;
+              const parsedH = resParts[1] ?? 0;
+              let imgWidth: number;
+              let imgHeight: number;
+              if (parsedW > 0 && parsedH > 0) {
+                imgWidth = parsedW;
+                imgHeight = parsedH;
+              } else if (aspectRatio === "portrait") {
+                imgWidth = 512;
+                imgHeight = 768;
+              } else if (aspectRatio === "square") {
+                imgWidth = 512;
+                imgHeight = 512;
+              } else {
+                imgWidth = 768;
+                imgHeight = 512;
+              }
+
+              let fullPrompt = style ? `${style}, ${imagePrompt}` : imagePrompt;
+
+              // Collect character avatar references when enabled
+              const useAvatarRefs = illustratorAgent?.resolved.settings?.useAvatarReferences === true;
+              let referenceImage: string | undefined;
+              let referenceImages: string[] | undefined;
+              if (useAvatarRefs && agentContext.characters.length > 0) {
+                const illCharLower = illCharacters.map((n: string) => n.toLowerCase().trim());
+                const refChars =
+                  illCharLower.length > 0
+                    ? agentContext.characters.filter((c) =>
+                        illCharLower.some((n: string) => c.name.toLowerCase() === n),
+                      )
+                    : agentContext.characters;
+                const refs: string[] = [];
+                const { readFileSync, existsSync } = await import("node:fs");
+                const { join } = await import("node:path");
+                const DATA_DIR = join(process.cwd(), "packages", "server", "data");
+                for (const c of refChars) {
+                  const charRow = await chars.getById(c.id);
+                  const avatarPath = charRow?.avatarPath as string | null;
+                  if (!avatarPath) continue;
+                  const filename = avatarPath.split("/").pop();
+                  if (!filename) continue;
+                  const diskPath = join(DATA_DIR, "avatars", filename);
+                  try {
+                    if (existsSync(diskPath)) refs.push(readFileSync(diskPath).toString("base64"));
+                  } catch {
+                    /* skip */
+                  }
+                }
+                if (refs.length > 0) referenceImages = refs;
+              } else if (agentContext.characters.length > 0) {
+                const firstChar = agentContext.characters[0];
+                if (firstChar) {
+                  const charRow = await chars.getById(firstChar.id);
+                  const avatarPath = charRow?.avatarPath as string | null;
+                  if (avatarPath) {
+                    const { readFileSync, existsSync } = await import("node:fs");
+                    const { join } = await import("node:path");
+                    const DATA_DIR = join(process.cwd(), "packages", "server", "data");
+                    const filename = avatarPath.split("/").pop();
+                    if (filename) {
+                      const diskPath = join(DATA_DIR, "avatars", filename);
+                      try {
+                        if (existsSync(diskPath)) referenceImage = readFileSync(diskPath).toString("base64");
+                      } catch {
+                        /* skip */
+                      }
+                    }
+                  }
+                }
+              }
+
+              const imageResult = await generateImage(imgModel, imgBaseUrl, imgApiKey, {
+                prompt: fullPrompt,
+                negativePrompt: negativePrompt || undefined,
+                model: imgModel,
+                width: imgWidth,
+                height: imgHeight,
+                comfyWorkflow: (imgConnFull as any).comfyuiWorkflow || undefined,
+                referenceImage,
+                referenceImages,
+              });
+
+              const filePath = saveImageToDisk(chatId, imageResult.base64, imageResult.ext);
+              const galleryEntry = await galleryStore.create({
+                chatId,
+                filePath,
+                prompt: fullPrompt,
+                provider: "image_generation",
+                model: imgModel || "unknown",
+                width: imgWidth,
+                height: imgHeight,
+              });
+
+              const filename = filePath.split("/").pop()!;
+              const imageUrl = `/api/gallery/file/${chatId}/${encodeURIComponent(filename)}`;
+
+              // Attach to message
+              if (retryMessageId) {
+                const chatsDb = createChatsStorage(app.db);
+                const attachment = { type: "image", url: imageUrl, filename: `illustration.${imageResult.ext}` };
+                const swipeRow = (await chatsDb.getSwipes(retryMessageId)).find(
+                  (s: any) => s.index === retrySwipeIndex,
+                );
+                if (swipeRow) {
+                  const swipeExtra =
+                    typeof swipeRow.extra === "string" ? JSON.parse(swipeRow.extra) : (swipeRow.extra ?? {});
+                  const swipeAtts = (swipeExtra.attachments as any[]) ?? [];
+                  swipeAtts.push(attachment);
+                  await chatsDb.updateSwipeExtra(retryMessageId, retrySwipeIndex, { attachments: swipeAtts });
+                }
+                const msgRow = await chatsDb.getMessage(retryMessageId);
+                if (msgRow && (msgRow.activeSwipeIndex ?? 0) === retrySwipeIndex) {
+                  const msgExtra = msgRow.extra
+                    ? typeof msgRow.extra === "string"
+                      ? JSON.parse(msgRow.extra)
+                      : msgRow.extra
+                    : {};
+                  const existingAttachments = (msgExtra.attachments as any[]) ?? [];
+                  existingAttachments.push(attachment);
+                  await chatsDb.updateMessageExtra(retryMessageId, { attachments: existingAttachments });
+                }
+              }
+
+              sendSseEvent(reply, {
+                type: "illustration",
+                data: {
+                  messageId: retryMessageId,
+                  imageUrl,
+                  prompt: fullPrompt,
+                  reason: illData.reason,
+                  galleryId: (galleryEntry as any)?.id,
+                },
+              });
+              console.log(
+                `[retry-agents] Illustrator generated: ${(illData.reason as string)?.slice(0, 80) ?? imagePrompt.slice(0, 80)}...`,
+              );
+            }
+          }
+        }
+      } catch (illErr) {
+        console.error("[retry-agents] Illustrator image generation failed:", illErr);
+        sendSseEvent(reply, {
+          type: "agent_error",
+          data: {
+            agentType: "illustrator",
+            error: illErr instanceof Error ? illErr.message : "Image generation failed",
+          },
+        });
+      }
+    }
   }
 }
 
@@ -673,6 +861,9 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
         agentContext,
         lorebooksStore,
         gameStateStore,
+        conns,
+        chars,
+        resolvedAgents,
       });
 
       sendSseEvent(reply, { type: "done", data: "" });

@@ -68,9 +68,12 @@ function parseWeather(weather?: string | null): {
   if (w.includes("blizzard")) {
     return { type: "snow", count: 150, overlay: "rgba(200,220,255,0.10)", lightning: false };
   }
-  if (w.includes("snow") || w.includes("frost") || w.includes("sleet")) {
+  if (w.includes("snow") || w.includes("sleet")) {
     const isHeavy = w.includes("heavy");
     return { type: "snow", count: isHeavy ? 120 : 50, overlay: "rgba(200,220,255,0.06)", lightning: false };
+  }
+  if (w.includes("frost") || w.includes("cold") || w.includes("freez")) {
+    return { type: "snow", count: 15, overlay: "rgba(180,210,240,0.06)", lightning: false };
   }
   if (w.includes("fog") || w.includes("mist") || w.includes("haze")) {
     return { type: "fog", count: 20, overlay: "rgba(180,180,200,0.12)", lightning: false };
@@ -765,17 +768,17 @@ export function WeatherEffects({ weather, timeOfDay }: WeatherEffectsProps) {
         ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
       }
 
-      // Lightning flash
+      // Lightning flash (epilepsy-safe: capped alpha, gentle decay, long gap between flashes)
       frameCount++;
       if (config.lightning) {
         if (frameCount >= nextLightning) {
-          lightningAlpha = 0.7 + Math.random() * 0.3; // bright flash
-          nextLightning = frameCount + 300 + Math.random() * 600; // next in 5-15s at 60fps
+          lightningAlpha = 0.45 + Math.random() * 0.15; // soft flash, max 0.6
+          nextLightning = frameCount + 400 + Math.random() * 800; // next in ~7-20s at 60fps
         }
         if (lightningAlpha > 0) {
           ctx.fillStyle = `rgba(220,230,255,${lightningAlpha})`;
           ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-          lightningAlpha *= 0.85; // rapid decay
+          lightningAlpha *= 0.88; // gentle decay
           if (lightningAlpha < 0.01) lightningAlpha = 0;
         }
       }

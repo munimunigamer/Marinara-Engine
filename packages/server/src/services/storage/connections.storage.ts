@@ -140,6 +140,10 @@ export function createConnectionsStorage(db: DB) {
         enableCaching: source.enableCaching,
         embeddingModel: source.embeddingModel,
         embeddingConnectionId: source.embeddingConnectionId,
+        defaultParameters: source.defaultParameters,
+        openrouterProvider: source.openrouterProvider,
+        embeddingBaseUrl: source.embeddingBaseUrl,
+        comfyuiWorkflow: source.comfyuiWorkflow,
         createdAt: timestamp,
         updatedAt: timestamp,
       });
@@ -154,6 +158,13 @@ export function createConnectionsStorage(db: DB) {
 
     async remove(id: string) {
       await db.delete(apiConnections).where(eq(apiConnections.id, id));
+    },
+
+    async updateDefaultParameters(id: string, params: Record<string, unknown> | null) {
+      await db
+        .update(apiConnections)
+        .set({ defaultParameters: params ? JSON.stringify(params) : null, updatedAt: now() })
+        .where(eq(apiConnections.id, id));
     },
   };
 }

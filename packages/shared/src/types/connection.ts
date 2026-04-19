@@ -38,6 +38,8 @@ export interface APIConnection {
   openrouterProvider: string | null;
   /** ComfyUI workflow JSON for image generation */
   comfyuiWorkflow: string | null;
+  /** Default generation parameters for new chats using this connection (JSON) */
+  defaultParameters: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -27,7 +27,8 @@ export function DraftNumberInput({
 
   const commit = () => {
     const parsed = integer ? parseInt(draft, 10) : parseFloat(draft);
-    const inRange = !Number.isNaN(parsed) && (min === undefined || parsed >= min) && (max === undefined || parsed <= max);
+    const inRange =
+      !Number.isNaN(parsed) && (min === undefined || parsed >= min) && (max === undefined || parsed <= max);
 
     if (inRange) {
       onCommit(parsed);

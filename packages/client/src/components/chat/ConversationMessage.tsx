@@ -17,12 +17,13 @@ import type { MessageSelectionToggle } from "./chat-area.types";
 /** Build style object for name color (supports gradients). */
 function nameColorStyle(color?: string): React.CSSProperties | undefined {
   if (!color) return undefined;
-  if (color.startsWith("linear-gradient")) {
+  if (color.includes("gradient(")) {
     return {
-      background: color,
+      backgroundImage: color,
       WebkitBackgroundClip: "text",
       WebkitTextFillColor: "transparent",
       backgroundClip: "text",
+      color: "transparent",
     };
   }
   return { color };

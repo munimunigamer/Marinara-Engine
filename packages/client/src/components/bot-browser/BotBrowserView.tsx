@@ -1073,7 +1073,7 @@ export function BotBrowserView() {
     return () => {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     };
-  }, [doSearch]);
+  }, [doSearch, query]);
 
   const openDetail = async (card: BrowseCard) => {
     setSelectedCard(card);
@@ -1891,7 +1891,7 @@ export function BotBrowserView() {
 
 function LoginModal({
   sourceId,
-  provider,
+  provider: _provider,
   pygLoggedIn,
   ctLoggedIn,
   loginLoading,
@@ -2186,6 +2186,7 @@ function DetailView({
   provider,
   onBack,
   onImport,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onDetailUpdate,
 }: {
   card: BrowseCard;

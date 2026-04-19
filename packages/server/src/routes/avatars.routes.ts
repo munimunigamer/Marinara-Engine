@@ -92,7 +92,10 @@ export async function avatarsRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Invalid avatar format — expected base64 data URL" });
     }
 
-    const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const safeName = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
     if (!safeName) {
       return reply.status(400).send({ error: "Invalid character name" });
     }

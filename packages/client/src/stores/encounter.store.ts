@@ -39,6 +39,9 @@ interface EncounterState {
   // ── Config modal ──
   showConfigModal: boolean;
 
+  // ── Selected spellbook ──
+  spellbookId: string | null;
+
   // ── Combat result ──
   combatResult: "victory" | "defeat" | "fled" | "interrupted" | null;
   summaryStatus: "idle" | "generating" | "done" | "error";
@@ -47,6 +50,7 @@ interface EncounterState {
   openConfigModal: () => void;
   closeConfigModal: () => void;
   updateSettings: (settings: Partial<EncounterSettings>) => void;
+  setSpellbookId: (id: string | null) => void;
 
   setLoading: (loading: boolean) => void;
   setProcessing: (processing: boolean) => void;
@@ -104,13 +108,15 @@ export const useEncounterStore = create<EncounterState>((set) => ({
 
   settings: defaultSettings,
   showConfigModal: false,
+  spellbookId: null,
 
   combatResult: null,
   summaryStatus: "idle",
 
-  openConfigModal: () => set({ showConfigModal: true }),
+  openConfigModal: () => set({ showConfigModal: true, spellbookId: null }),
   closeConfigModal: () => set({ showConfigModal: false }),
   updateSettings: (partial) => set((s) => ({ settings: { ...s.settings, ...partial } })),
+  setSpellbookId: (id) => set({ spellbookId: id }),
 
   setLoading: (loading) => set({ isLoading: loading }),
   setProcessing: (processing) => set({ isProcessing: processing }),
@@ -182,6 +188,7 @@ export const useEncounterStore = create<EncounterState>((set) => ({
       encounterLog: [],
       pendingLogs: [],
       showConfigModal: false,
+      spellbookId: null,
       combatResult: null,
       summaryStatus: "idle",
     }),

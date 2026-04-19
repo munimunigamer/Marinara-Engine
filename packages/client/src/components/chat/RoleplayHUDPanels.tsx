@@ -431,8 +431,11 @@ export function CharactersPanel({ characters, onUpdate, chatId }: CharactersPane
   }, [agentConfigs]);
   const trackerSettings = useMemo(() => {
     if (!trackerConfig?.settings) return {} as Record<string, unknown>;
-    try { return typeof trackerConfig.settings === "string" ? JSON.parse(trackerConfig.settings) : trackerConfig.settings; }
-    catch { return {} as Record<string, unknown>; }
+    try {
+      return typeof trackerConfig.settings === "string" ? JSON.parse(trackerConfig.settings) : trackerConfig.settings;
+    } catch {
+      return {} as Record<string, unknown>;
+    }
   }, [trackerConfig]);
   const autoGenEnabled = !!(trackerSettings as Record<string, unknown>).autoGenerateAvatars;
   const toggleAutoGenerate = useCallback(() => {
@@ -539,11 +542,7 @@ export function CharactersPanel({ characters, onUpdate, chatId }: CharactersPane
                   className="shrink-0 rounded-full overflow-hidden ring-1 ring-purple-400/40 hover:ring-purple-400/80 transition-all"
                   title="Change avatar"
                 >
-                  <img
-                    src={char.avatarPath}
-                    alt={char.name}
-                    className="w-8 h-8 object-cover"
-                  />
+                  <img src={char.avatarPath} alt={char.name} className="w-8 h-8 object-cover" />
                 </button>
               ) : (
                 <button

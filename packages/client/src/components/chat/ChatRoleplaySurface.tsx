@@ -754,6 +754,7 @@ type RoleplaySurfaceProps = {
   onToggleSelectMessage: (toggle: MessageSelectionToggle) => void;
   onSummaryContextSizeChange: (size: number) => void;
   onRerunTrackers: () => void;
+  onRetryFailedAgents?: () => void;
   onStartEncounter: () => void;
   onConcludeScene: () => void;
   onAbandonScene: () => void;
@@ -763,6 +764,7 @@ type RoleplaySurfaceProps = {
   onCloseSettings: () => void;
   onCloseFiles: () => void;
   onCloseGallery: () => void;
+  onIllustrate?: () => void;
   onWizardFinish: () => void;
   onClosePeekPrompt: () => void;
   onResetSpritePlacements: () => void;
@@ -839,6 +841,7 @@ export function ChatRoleplaySurface({
   onToggleSelectMessage,
   onSummaryContextSizeChange,
   onRerunTrackers,
+  onRetryFailedAgents,
   onStartEncounter,
   onConcludeScene,
   onAbandonScene,
@@ -848,6 +851,7 @@ export function ChatRoleplaySurface({
   onCloseSettings,
   onCloseFiles,
   onCloseGallery,
+  onIllustrate,
   onWizardFinish,
   onClosePeekPrompt,
   onResetSpritePlacements,
@@ -909,6 +913,7 @@ export function ChatRoleplaySurface({
                         characterCount={chatCharIds.length}
                         layout="top"
                         onRetriggerTrackers={onRerunTrackers}
+                        onRetryFailedAgents={onRetryFailedAgents}
                         enabledAgentTypes={enabledAgentTypes}
                         manualTrackers={!!chatMeta.manualTrackers}
                       />
@@ -978,6 +983,7 @@ export function ChatRoleplaySurface({
                         characterCount={chatCharIds.length}
                         layout="top"
                         onRetriggerTrackers={onRerunTrackers}
+                        onRetryFailedAgents={onRetryFailedAgents}
                         enabledAgentTypes={enabledAgentTypes}
                         manualTrackers={!!chatMeta.manualTrackers}
                         mobileCompact
@@ -1257,6 +1263,7 @@ export function ChatRoleplaySurface({
         onCloseSettings={onCloseSettings}
         onCloseFiles={onCloseFiles}
         onCloseGallery={onCloseGallery}
+        onIllustrate={onIllustrate}
         onWizardFinish={onWizardFinish}
         onClosePeekPrompt={onClosePeekPrompt}
         onDeleteConfirm={onDeleteConfirm}

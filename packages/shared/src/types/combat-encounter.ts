@@ -123,6 +123,8 @@ export interface EncounterInitRequest {
   chatId: string;
   connectionId: string | null;
   settings: EncounterSettings;
+  /** Optional spellbook lorebook ID to inject spell/attack data into combat */
+  spellbookId?: string | null;
 }
 
 /** Response from POST /api/encounter/init */
@@ -143,6 +145,8 @@ export interface EncounterActionRequest {
   playerActions: CombatPlayerActions | null;
   encounterLog: EncounterLogEntry[];
   settings: EncounterSettings;
+  /** Optional spellbook lorebook ID to inject spell/attack data into combat */
+  spellbookId?: string | null;
 }
 
 /** Response from POST /api/encounter/action */

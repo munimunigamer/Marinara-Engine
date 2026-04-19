@@ -130,6 +130,18 @@ if [ ! -d "packages/client/dist" ]; then
     pnpm build:client
 fi
 
+# ── Sidecar (local model) — rebuild native addon if user has a model downloaded ──
+SIDECAR_CONFIG="packages/server/data/models/sidecar-config.json"
+if [ -f "$SIDECAR_CONFIG" ]; then
+    # Check if the node-llama-cpp native build is present for the latest llama.cpp release
+    LLAMA_BUILD_DIR=$(find node_modules/.pnpm -maxdepth 5 -path '*/node-llama-cpp/llama/localBuilds' -type d 2>/dev/null | head -1)
+    if [ -z "$LLAMA_BUILD_DIR" ] || [ -z "$(find "$LLAMA_BUILD_DIR" -name 'llama-addon.node' 2>/dev/null | head -1)" ]; then
+        echo "  [..] Building sidecar native addon (first time, may take a few minutes)..."
+        pnpm sidecar:build
+        echo "  [OK] Sidecar addon built"
+    fi
+fi
+
 # Database migrations are handled automatically at server startup by runMigrations()
 
 # ── Start ──

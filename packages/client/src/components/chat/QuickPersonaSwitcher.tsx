@@ -57,7 +57,11 @@ export function QuickPersonaSwitcher({ className }: { className?: string }) {
   }, [personas]);
 
   // Parse persona groups and resolve members
-  const { groups, groupedPersonaIds, ungrouped } = useMemo(() => {
+  const {
+    groups,
+    groupedPersonaIds: _groupedPersonaIds,
+    ungrouped,
+  } = useMemo(() => {
     const groupRows = (rawPersonaGroups ?? []) as PersonaGroupRow[];
     const allGroupedIds = new Set<string>();
     const parsedGroups: ParsedGroup[] = [];

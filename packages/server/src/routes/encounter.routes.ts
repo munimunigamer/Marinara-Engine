@@ -6,6 +6,7 @@ import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createGameStateStorage } from "../services/storage/game-state.storage.js";
+import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import type { ChatMessage } from "../services/llm/base-provider.js";
 import type {
@@ -175,6 +176,7 @@ function buildInitPrompt(
   characterCtx: string,
   chatHistory: ChatMessage[],
   gameStateCtx: string,
+  spellbookCtx: string,
 ): ChatMessage[] {
   const msgs: ChatMessage[] = [];
 
@@ -191,6 +193,12 @@ function buildInitPrompt(
   // Game state
   if (gameStateCtx) {
     system += `Current tracked context:\n<context>\n${gameStateCtx}</context>\n\n`;
+  }
+
+  // Spellbook
+  if (spellbookCtx) {
+    system += `Available spells and abilities that the player and their party can use in combat:\n<spellbook>\n${spellbookCtx}</spellbook>\n\n`;
+    system += `IMPORTANT: When generating the party's attacks, prioritize spells/abilities from the spellbook above. These are the player's known spells and custom attacks that MUST be available as attack options.\n\n`;
   }
 
   system += `Here is the chat history before the encounter:\n<history>\n`;
@@ -257,6 +265,7 @@ function buildActionPrompt(
   playerActions: CombatPlayerActions | null,
   encounterLog: EncounterLogEntry[],
   narrative: NarrativeStyle,
+  spellbookCtx: string,
 ): ChatMessage[] {
   const msgs: ChatMessage[] = [];
 
@@ -265,6 +274,9 @@ function buildActionPrompt(
     system += `<characters>\n${characterCtx}</characters>\n\n`;
   }
   system += `<persona>\n${personaCtx}\n</persona>\n\n`;
+  if (spellbookCtx) {
+    system += `Available spells and abilities:\n<spellbook>\n${spellbookCtx}</spellbook>\n\n`;
+  }
   msgs.push({ role: "system", content: system });
 
   // Recent chat history for context (already sliced to historyDepth by caller)
@@ -370,10 +382,25 @@ export async function encounterRoutes(app: FastifyInstance) {
   const connections = createConnectionsStorage(app.db);
   const chars = createCharactersStorage(app.db);
   const gsStorage = createGameStateStorage(app.db);
+  const lbStorage = createLorebooksStorage(app.db);
+
+  /** Load spellbook entries and format them as context text. */
+  async function loadSpellbookContext(spellbookId: string | null | undefined): Promise<string> {
+    if (!spellbookId) return "";
+    const entries = await lbStorage.listEntriesByLorebooks([spellbookId]);
+    if (!entries.length) return "";
+    let ctx = "";
+    for (const entry of entries) {
+      if (!entry.enabled) continue;
+      const e = entry as Record<string, unknown>;
+      ctx += `<spell name="${e.name}">\n${e.content}\n</spell>\n`;
+    }
+    return ctx;
+  }
 
   // ───────────────────────── INIT ─────────────────────────
   app.post<{ Body: EncounterInitRequest }>("/init", async (req, reply) => {
-    const { chatId, connectionId, settings } = req.body;
+    const { chatId, connectionId, settings, spellbookId } = req.body;
 
     if (!chatId || !settings) {
       return reply.status(400).send({ error: "Missing required fields: chatId, settings" });
@@ -390,6 +417,7 @@ export async function encounterRoutes(app: FastifyInstance) {
       const characterCtx = await buildCharacterContext(chars, characterIds);
       const { personaName, personaCtx } = await buildPersonaContext(chars);
       const gameStateCtx = await buildGameStateContext(gsStorage, chatId, personaName);
+      const spellbookCtx = await loadSpellbookContext(spellbookId);
 
       // Get recent chat messages for history
       const chatMessages = await chats.listMessages(chatId);
@@ -399,7 +427,7 @@ export async function encounterRoutes(app: FastifyInstance) {
         content: m.content as string,
       }));
 
-      const prompt = buildInitPrompt(personaName, personaCtx, characterCtx, recentMsgs, gameStateCtx);
+      const prompt = buildInitPrompt(personaName, personaCtx, characterCtx, recentMsgs, gameStateCtx, spellbookCtx);
 
       const result = await provider.chatComplete(prompt, {
         model: conn.model,
@@ -431,7 +459,7 @@ export async function encounterRoutes(app: FastifyInstance) {
 
   // ───────────────────────── ACTION ─────────────────────────
   app.post<{ Body: EncounterActionRequest }>("/action", async (req, reply) => {
-    const { chatId, connectionId, action, combatStats, playerActions, encounterLog, settings } = req.body;
+    const { chatId, connectionId, action, combatStats, playerActions, encounterLog, settings, spellbookId } = req.body;
 
     if (!chatId || !action || !combatStats || !settings) {
       return reply.status(400).send({ error: "Missing required fields: chatId, action, combatStats, settings" });
@@ -447,6 +475,7 @@ export async function encounterRoutes(app: FastifyInstance) {
       const characterIds: string[] = JSON.parse(chat.characterIds as string);
       const characterCtx = await buildCharacterContext(chars, characterIds);
       const { personaName, personaCtx } = await buildPersonaContext(chars);
+      const spellbookCtx = await loadSpellbookContext(spellbookId);
 
       const chatMessages = await chats.listMessages(chatId);
       const depth = settings.historyDepth || 8;
@@ -465,6 +494,7 @@ export async function encounterRoutes(app: FastifyInstance) {
         playerActions,
         encounterLog ?? [],
         settings.combatNarrative,
+        spellbookCtx,
       );
 
       const result = await provider.chatComplete(prompt, {

@@ -6,8 +6,10 @@ import { useQuery } from "@tanstack/react-query";
 import { APP_VERSION } from "@marinara-engine/shared";
 import { AppShell } from "./components/layout/AppShell";
 import { CustomThemeInjector } from "./components/layout/CustomThemeInjector";
+import { ModelDownloadModal } from "./components/modals/ModelDownloadModal";
 import { Toaster } from "sonner";
 import { useUIStore } from "./stores/ui.store";
+import { useSidecarStore } from "./stores/sidecar.store";
 import { api } from "./lib/api-client";
 import { clearBrowserRuntimeCaches } from "./lib/cache-reset";
 import { useLegacyThemeMigration } from "./hooks/use-themes";
@@ -47,6 +49,18 @@ export function App() {
   const hasModalOpen = useUIStore((s) => s.modal !== null);
   useLegacyThemeMigration();
   useSettingsSync();
+  const showDownloadModal = useSidecarStore((s) => s.showDownloadModal);
+  const setShowDownloadModal = useSidecarStore((s) => s.setShowDownloadModal);
+  const fetchSidecarStatus = useSidecarStore((s) => s.fetchStatus);
+
+  // Fetch sidecar status on mount and prompt if first visit
+  useEffect(() => {
+    fetchSidecarStatus().then(() => {
+      if (!useSidecarStore.getState().hasBeenPrompted) {
+        setShowDownloadModal(true);
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply theme + font size to the document root whenever they change
   useEffect(() => {
@@ -173,6 +187,7 @@ export function App() {
     <>
       <CustomThemeInjector />
       <AppShell />
+      <ModelDownloadModal open={showDownloadModal} onClose={() => setShowDownloadModal(false)} />
       {hasModalOpen && (
         <Suspense fallback={null}>
           <LazyModalRenderer />

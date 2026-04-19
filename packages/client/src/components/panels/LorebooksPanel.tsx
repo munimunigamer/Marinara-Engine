@@ -19,9 +19,11 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  Wand2,
 } from "lucide-react";
 import { useUIStore } from "../../stores/ui.store";
 import { useLorebooks, useDeleteLorebook, useUpdateLorebook } from "../../hooks/use-lorebooks";
+import { useCharacters } from "../../hooks/use-characters";
 import type { Lorebook, LorebookCategory } from "@marinara-engine/shared";
 import { cn } from "../../lib/utils";
 import { api } from "../../lib/api-client";
@@ -31,6 +33,7 @@ const CATEGORIES: Array<{ id: LorebookCategory | "all"; label: string; icon: typ
   { id: "world", label: "World", icon: Globe },
   { id: "character", label: "Character", icon: Users },
   { id: "npc", label: "NPC", icon: UserRound },
+  { id: "spellbook", label: "Spellbook", icon: Wand2 },
   { id: "uncategorized", label: "Other", icon: BookOpen },
 ];
 
@@ -38,6 +41,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   world: "from-emerald-400 to-teal-500",
   character: "from-violet-400 to-purple-500",
   npc: "from-rose-400 to-pink-500",
+  spellbook: "from-blue-400 to-indigo-500",
   uncategorized: "from-amber-400 to-orange-500",
   all: "from-amber-400 to-orange-500",
 };
@@ -53,10 +57,25 @@ export function LorebooksPanel() {
   const [exportingSelected, setExportingSelected] = useState(false);
 
   const { data: lorebooks, isLoading } = useLorebooks(activeCategory === "all" ? undefined : activeCategory);
+  const { data: rawCharacters } = useCharacters();
   const deleteLorebook = useDeleteLorebook();
   const updateLorebook = useUpdateLorebook();
   const openModal = useUIStore((s) => s.openModal);
   const openLorebookDetail = useUIStore((s) => s.openLorebookDetail);
+
+  const characterNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!rawCharacters) return map;
+    for (const c of rawCharacters as Array<{ id: string; data: string | Record<string, unknown> }>) {
+      try {
+        const d = typeof c.data === "string" ? JSON.parse(c.data) : c.data;
+        map.set(c.id, d?.name ?? "Unknown");
+      } catch {
+        map.set(c.id, "Unknown");
+      }
+    }
+    return map;
+  }, [rawCharacters]);
 
   const parseTags = (lb: Lorebook): string[] => {
     const raw = lb.tags;
@@ -179,21 +198,23 @@ export function LorebooksPanel() {
         <button
           onClick={() => openModal("create-lorebook")}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-3 py-2.5 text-xs font-medium text-white shadow-md shadow-amber-400/15 transition-all hover:shadow-lg hover:shadow-amber-400/25 active:scale-[0.98]"
+          title="New"
         >
-          <Plus size="0.8125rem" /> New
+          <Plus size="0.8125rem" /> <span className="md:hidden">New</span>
         </button>
         <button
           onClick={() => openModal("import-lorebook")}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-xs font-medium text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-[0.98]"
+          title="Import"
         >
-          <Download size="0.8125rem" /> Import
+          <Download size="0.8125rem" /> <span className="md:hidden">Import</span>
         </button>
         <button
           onClick={() => openModal("lorebook-maker")}
-          className="flex items-center justify-center gap-1.5 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-xs font-medium text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-[0.98]"
-          title="AI Generate"
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-xs font-medium text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-[0.98]"
+          title="AI Maker"
         >
-          <Sparkles size="0.8125rem" />
+          <Sparkles size="0.8125rem" /> <span className="md:hidden">Maker</span>
         </button>
         <button
           onClick={() => {
@@ -201,13 +222,14 @@ export function LorebooksPanel() {
             else setSelectionMode(true);
           }}
           className={cn(
-            "flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-xs font-medium transition-all",
+            "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-xs font-medium transition-all",
             selectionMode
               ? "bg-amber-400/15 text-amber-400 ring-1 ring-amber-400/30"
               : "bg-[var(--secondary)] text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
           )}
+          title="Select"
         >
-          <Download size="0.8125rem" /> Select
+          <Download size="0.8125rem" /> <span className="md:hidden">Select</span>
         </button>
       </div>
 
@@ -400,6 +422,7 @@ export function LorebooksPanel() {
                       <LorebookRow
                         key={lb.id}
                         lorebook={lb}
+                        characterName={lb.characterId ? characterNameById.get(lb.characterId) : undefined}
                         onClick={() => {
                           if (selectionMode) toggleSelection(lb.id);
                           else openLorebookDetail(lb.id);
@@ -420,6 +443,7 @@ export function LorebooksPanel() {
                 <LorebookRow
                   key={lb.id}
                   lorebook={lb}
+                  characterName={lb.characterId ? characterNameById.get(lb.characterId) : undefined}
                   onClick={() => {
                     if (selectionMode) toggleSelection(lb.id);
                     else openLorebookDetail(lb.id);
@@ -440,6 +464,7 @@ export function LorebooksPanel() {
 
 function LorebookRow({
   lorebook,
+  characterName,
   onClick,
   onDelete,
   selectionMode,
@@ -447,6 +472,7 @@ function LorebookRow({
   onToggleSelect,
 }: {
   lorebook: Lorebook;
+  characterName?: string;
   onClick: () => void;
   onDelete: () => void;
   selectionMode?: boolean;
@@ -500,7 +526,15 @@ function LorebookRow({
           )}
         </div>
         <div className="truncate text-[0.6875rem] text-[var(--muted-foreground)]">
-          {lorebook.description || "No description"}
+          {characterName ? (
+            <span className="inline-flex items-center gap-1">
+              <UserRound size="0.625rem" className="shrink-0" />
+              {characterName}
+              {lorebook.description ? ` · ${lorebook.description}` : ""}
+            </span>
+          ) : (
+            lorebook.description || "No description"
+          )}
         </div>
       </div>
       {!selectionMode && (

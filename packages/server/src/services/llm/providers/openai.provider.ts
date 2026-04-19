@@ -18,7 +18,7 @@ import {
  * GPT-5.4 base uses Chat Completions; Pro and Codex variants use Responses.
  * Matching is case-insensitive.
  */
-const RESPONSES_ONLY_PREFIXES = ["gpt-5.4", "codex-"];
+const RESPONSES_ONLY_PREFIXES = ["gpt-5.4-pro", "gpt-5.4-mini", "codex-"];
 const RESPONSES_ONLY_SUFFIXES = ["-codex", "-codex-max", "-codex-mini"];
 
 /**
@@ -106,6 +106,8 @@ export class OpenAIProvider extends BaseLLMProvider {
     const m = model.toLowerCase();
     if (/^(o1|o3|o4)/.test(m)) return true;
     if (m.startsWith("gpt-5") && reasoningEffort && reasoningEffort !== "none") return true;
+    // Claude Opus 4.7+: all sampling params forbidden (covers reverse proxies)
+    if (/claude-opus-4-(?:[7-9]|\d{2,})/.test(m)) return true;
     return false;
   }
 
@@ -115,7 +117,17 @@ export class OpenAIProvider extends BaseLLMProvider {
     return RESPONSES_ONLY_PREFIXES.some((p) => m.startsWith(p)) || RESPONSES_ONLY_SUFFIXES.some((s) => m.endsWith(s));
   }
 
-  private formatMessages(messages: ChatMessage[]) {
+  /**
+   * Whether this model uses "developer" role instead of "system" in Chat Completions.
+   * OpenAI GPT-5.x and o-series models use "developer" for system-level instructions.
+   */
+  private usesDeveloperRole(model: string): boolean {
+    const m = model.toLowerCase();
+    return m.startsWith("gpt-5") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4");
+  }
+
+  private formatMessages(messages: ChatMessage[], model?: string) {
+    const devRole = model && this.usesDeveloperRole(model);
     return messages
       .filter((m) => {
         // Keep tool messages and assistant messages with tool_calls regardless of content
@@ -144,7 +156,9 @@ export class OpenAIProvider extends BaseLLMProvider {
           }
           return { role: m.role, content: parts };
         }
-        return { role: m.role, content: m.content };
+        // Map system → developer for newer OpenAI models
+        const role = m.role === "system" && devRole ? "developer" : m.role;
+        return { role, content: m.content };
       });
   }
 
@@ -162,20 +176,25 @@ export class OpenAIProvider extends BaseLLMProvider {
     const url = `${this.baseUrl}/chat/completions`;
     const reasoning = this.isReasoningModel(options.model);
 
-    const formatted = this.formatMessages(messages);
+    const formatted = this.formatMessages(messages, options.model);
     // Ensure at least one non-system message exists (some providers like Gemini
     // reject requests with only system messages)
-    if (!formatted.some((m) => m.role !== "system")) {
+    if (!formatted.some((m) => m.role !== "system" && m.role !== "developer")) {
       formatted.push({ role: "user", content: "Continue." });
     }
+
+    // GPT-5.x reasoning models on Chat Completions always return SSE regardless
+    // of stream:false, so force streaming for them to avoid JSON parse failures.
+    const forceStream = reasoning && options.model.toLowerCase().startsWith("gpt-5");
+    const effectiveStream = forceStream || (options.stream ?? true);
 
     const body: Record<string, unknown> = {
       model: options.model,
       messages: formatted,
-      stream: options.stream ?? true,
+      stream: effectiveStream,
       ...(options.stop?.length ? { stop: options.stop } : {}),
       ...(options.tools?.length ? { tools: options.tools } : {}),
-      ...((options.stream ?? true) ? { stream_options: { include_usage: true } } : {}),
+      ...(effectiveStream ? { stream_options: { include_usage: true } } : {}),
     };
 
     if (reasoning) {
@@ -213,6 +232,11 @@ export class OpenAIProvider extends BaseLLMProvider {
       body.provider = { order: [options.openrouterProvider] };
     }
 
+    // Force response format (e.g. JSON mode)
+    if (options.responseFormat) {
+      body.response_format = options.responseFormat;
+    }
+
     console.log("[OpenAI chat()] stream=%s model=%s", body.stream, body.model);
 
     const response = await llmFetch(url, {
@@ -227,7 +251,7 @@ export class OpenAIProvider extends BaseLLMProvider {
       throw new Error(`OpenAI API error ${response.status}: ${sanitizeApiError(errorText)}`);
     }
 
-    if (!options.stream) {
+    if (!effectiveStream) {
       const json = (await response.json()) as {
         choices: Array<{ message: Record<string, unknown> & { content: string | unknown[] } }>;
         usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
@@ -344,11 +368,14 @@ export class OpenAIProvider extends BaseLLMProvider {
     const url = `${this.baseUrl}/chat/completions`;
     const reasoning = this.isReasoningModel(options.model);
 
-    // Use streaming when an onToken callback is provided, so text arrives in real time
-    const useStream = !!options.onToken;
+    // Use streaming when an onToken callback is provided, so text arrives in real time.
+    // GPT-5.x reasoning models on Chat Completions always return SSE regardless of
+    // stream:false, so force streaming for them to avoid JSON parse failures.
+    const forceStream = reasoning && options.model.toLowerCase().startsWith("gpt-5");
+    const useStream = !!options.onToken || forceStream;
 
-    const formatted = this.formatMessages(messages);
-    if (!formatted.some((m) => m.role !== "system")) {
+    const formatted = this.formatMessages(messages, options.model);
+    if (!formatted.some((m) => m.role !== "system" && m.role !== "developer")) {
       formatted.push({ role: "user", content: "Continue." });
     }
 
@@ -389,6 +416,11 @@ export class OpenAIProvider extends BaseLLMProvider {
     // OpenRouter provider routing preference
     if (options.openrouterProvider && this.baseUrl.includes("openrouter.ai")) {
       body.provider = { order: [options.openrouterProvider] };
+    }
+
+    // Force response format (e.g. JSON mode)
+    if (options.responseFormat) {
+      body.response_format = options.responseFormat;
     }
 
     console.log("[OpenAI chatComplete()] stream=%s model=%s onToken=%s", useStream, body.model, !!options.onToken);
@@ -523,11 +555,11 @@ export class OpenAIProvider extends BaseLLMProvider {
             if (!reasoning && blocks.thinking && options.onThinking) options.onThinking(blocks.thinking);
             if (blocks.text) {
               content += blocks.text;
-              options.onToken!(blocks.text);
+              options.onToken?.(blocks.text);
             }
           } else if (delta?.content) {
             content += delta.content as string;
-            options.onToken!(delta.content as string);
+            options.onToken?.(delta.content as string);
           }
 
           // Accumulate tool call deltas
@@ -693,19 +725,20 @@ export class OpenAIProvider extends BaseLLMProvider {
   private buildResponsesBody(messages: ChatMessage[], options: ChatOptions): Record<string, unknown> {
     const { instructions, input } = this.formatResponsesInput(messages);
 
-    // TEMPORARILY DISABLED — testing whether reasoning replay causes repetition
-    // if (options.encryptedReasoningItems?.length) {
-    //   let lastAssistantIdx = -1;
-    //   for (let i = input.length - 1; i >= 0; i--) {
-    //     if ((input[i] as Record<string, unknown>).role === "assistant") {
-    //       lastAssistantIdx = i;
-    //       break;
-    //     }
-    //   }
-    //   if (lastAssistantIdx >= 0) {
-    //     input.splice(lastAssistantIdx, 0, ...(options.encryptedReasoningItems as Array<Record<string, unknown>>));
-    //   }
-    // }
+    // Replay encrypted reasoning items from the previous turn so the model
+    // retains its reasoning context and avoids re-deriving (and re-narrating) the same conclusions.
+    if (options.encryptedReasoningItems?.length) {
+      let lastAssistantIdx = -1;
+      for (let i = input.length - 1; i >= 0; i--) {
+        if ((input[i] as Record<string, unknown>).role === "assistant") {
+          lastAssistantIdx = i;
+          break;
+        }
+      }
+      if (lastAssistantIdx >= 0) {
+        input.splice(lastAssistantIdx, 0, ...(options.encryptedReasoningItems as Array<Record<string, unknown>>));
+      }
+    }
 
     const body: Record<string, unknown> = {
       model: options.model,

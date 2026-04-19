@@ -839,27 +839,27 @@ export const ChatMessage = memo(function ChatMessage({
               </div>
             )}
             <div className="mari-message-bubble relative flex-1 rounded-xl border border-amber-500/10 bg-black/40 px-5 py-4">
-            {/* Delete button */}
-            {!multiSelectMode && onDelete && (
-              <button
-                onClick={() => onDelete(message.id)}
-                className={cn(
-                  "absolute right-2 top-2 rounded-md p-1 text-white/20 opacity-0 transition-all hover:bg-red-500/20 hover:text-red-400 group-hover:opacity-100",
-                  showActions && "opacity-100",
-                )}
-                title="Delete"
-              >
-                <Trash2 size="0.75rem" />
-              </button>
-            )}
-            <div className="mb-1 flex items-center gap-2 text-[0.625rem] font-semibold uppercase tracking-widest text-amber-400/70">
-              <span className="h-px flex-1 bg-amber-400/20" />
-              Narrator
-              <span className="h-px flex-1 bg-amber-400/20" />
-            </div>
-            <div className="mari-message-content whitespace-pre-wrap break-words italic" style={messageTextStyle}>
-              {displayContent}
-            </div>
+              {/* Delete button */}
+              {!multiSelectMode && onDelete && (
+                <button
+                  onClick={() => onDelete(message.id)}
+                  className={cn(
+                    "absolute right-2 top-2 rounded-md p-1 text-white/20 opacity-0 transition-all hover:bg-red-500/20 hover:text-red-400 group-hover:opacity-100",
+                    showActions && "opacity-100",
+                  )}
+                  title="Delete"
+                >
+                  <Trash2 size="0.75rem" />
+                </button>
+              )}
+              <div className="mb-1 flex items-center gap-2 text-[0.625rem] font-semibold uppercase tracking-widest text-amber-400/70">
+                <span className="h-px flex-1 bg-amber-400/20" />
+                Narrator
+                <span className="h-px flex-1 bg-amber-400/20" />
+              </div>
+              <div className="mari-message-content whitespace-pre-wrap break-words italic" style={messageTextStyle}>
+                {displayContent}
+              </div>
             </div>
           </div>
         </div>

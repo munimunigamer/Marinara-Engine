@@ -17,7 +17,11 @@ import { existsSync, rmSync } from "fs";
 import { join } from "path";
 import { DATA_DIR } from "../../utils/data-dir.js";
 import type { CreateChatInput, CreateMessageInput } from "@marinara-engine/shared";
-import { latestTrustedTimestamp, normalizeTimestampOverrides, type TimestampOverrides } from "../import/import-timestamps.js";
+import {
+  latestTrustedTimestamp,
+  normalizeTimestampOverrides,
+  type TimestampOverrides,
+} from "../import/import-timestamps.js";
 
 const GALLERY_DIR = join(DATA_DIR, "gallery");
 
@@ -264,15 +268,16 @@ export function createChatsStorage(db: DB) {
 
       const lastTimestamp = latestTrustedTimestamp(createdTimestamps) ?? batchTimestamps.updatedAt;
 
-      // Batch in chunks of 500 to stay within SQLite variable limits
+      // Batch in chunks of 500 to stay within SQLite variable limits.
+      // Deliberately avoids db.transaction() — libSQL's stateful transaction
+      // objects trigger a use-after-free / race on Windows when the loop is
+      // large, causing an access-violation crash (see #73).
       const CHUNK = 500;
-      await db.transaction(async (tx) => {
-        for (let i = 0; i < msgRows.length; i += CHUNK) {
-          await tx.insert(messages).values(msgRows.slice(i, i + CHUNK));
-          await tx.insert(messageSwipes).values(swipeRows.slice(i, i + CHUNK));
-        }
-        await tx.update(chats).set({ updatedAt: lastTimestamp }).where(eq(chats.id, chatId));
-      });
+      for (let i = 0; i < msgRows.length; i += CHUNK) {
+        await db.insert(messages).values(msgRows.slice(i, i + CHUNK));
+        await db.insert(messageSwipes).values(swipeRows.slice(i, i + CHUNK));
+      }
+      await db.update(chats).set({ updatedAt: lastTimestamp }).where(eq(chats.id, chatId));
     },
 
     async updateMessageContent(id: string, content: string) {

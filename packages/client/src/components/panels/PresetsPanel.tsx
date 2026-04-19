@@ -112,14 +112,16 @@ export function PresetsPanel() {
         <button
           onClick={() => openModal("create-preset")}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-400 to-violet-500 px-3 py-2.5 text-xs font-medium text-white shadow-md shadow-purple-400/15 transition-all hover:shadow-lg hover:shadow-purple-400/25 active:scale-[0.98]"
+          title="New"
         >
-          <Plus size="0.8125rem" /> New
+          <Plus size="0.8125rem" /> <span className="md:hidden">New</span>
         </button>
         <button
           onClick={() => openModal("import-preset")}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-xs font-medium text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] active:scale-[0.98]"
+          title="Import"
         >
-          <Download size="0.8125rem" /> Import
+          <Download size="0.8125rem" /> <span className="md:hidden">Import</span>
         </button>
         <button
           onClick={() => {
@@ -127,13 +129,14 @@ export function PresetsPanel() {
             else setSelectionMode(true);
           }}
           className={cn(
-            "flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-xs font-medium transition-all",
+            "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-xs font-medium transition-all",
             selectionMode
               ? "bg-purple-400/15 text-purple-400 ring-1 ring-purple-400/30"
               : "bg-[var(--secondary)] text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
           )}
+          title="Select"
         >
-          <Check size="0.8125rem" /> Select
+          <Check size="0.8125rem" /> <span className="md:hidden">Select</span>
         </button>
       </div>
 
@@ -276,57 +279,57 @@ export function PresetsPanel() {
               {/* Action buttons */}
               {!selectionMode && (
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 flex shrink-0 items-center gap-0.5 rounded-lg bg-[var(--sidebar)] px-1 py-0.5 opacity-0 shadow-sm ring-1 ring-[var(--border)] transition-opacity group-hover:opacity-100 max-md:opacity-100">
-                {activeChat && (
+                  {activeChat && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectPreset(preset.id);
+                      }}
+                      className={cn(
+                        "rounded-lg p-1.5 transition-all active:scale-90",
+                        isSelected
+                          ? "bg-purple-400/15 text-purple-400"
+                          : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                      )}
+                      title={isSelected ? "Unassign from chat" : "Assign to chat"}
+                    >
+                      <Check size="0.75rem" />
+                    </button>
+                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      selectPreset(preset.id);
+                      setDefaultPreset.mutate(preset.id);
                     }}
                     className={cn(
                       "rounded-lg p-1.5 transition-all active:scale-90",
-                      isSelected
-                        ? "bg-purple-400/15 text-purple-400"
-                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
+                      isDefault
+                        ? "text-yellow-500"
+                        : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-yellow-500",
                     )}
-                    title={isSelected ? "Unassign from chat" : "Assign to chat"}
+                    title={isDefault ? "Default preset" : "Set as default"}
                   >
-                    <Check size="0.75rem" />
+                    <Star size="0.75rem" className={isDefault ? "fill-yellow-500" : ""} />
                   </button>
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDefaultPreset.mutate(preset.id);
-                  }}
-                  className={cn(
-                    "rounded-lg p-1.5 transition-all active:scale-90",
-                    isDefault
-                      ? "text-yellow-500"
-                      : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-yellow-500",
-                  )}
-                  title={isDefault ? "Default preset" : "Set as default"}
-                >
-                  <Star size="0.75rem" className={isDefault ? "fill-yellow-500" : ""} />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    duplicatePreset.mutate(preset.id);
-                  }}
-                  className="rounded-lg p-1.5 transition-all hover:bg-[var(--accent)] active:scale-90"
-                  title="Duplicate"
-                >
-                  <Copy size="0.75rem" className="text-[var(--muted-foreground)]" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm(`Delete "${preset.name}"?`)) {
-                      deletePreset.mutate(preset.id);
-                    }
-                  }}
-                  className="rounded-lg p-1.5 transition-all hover:bg-[var(--destructive)]/15 active:scale-90"
-                  title="Delete"
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      duplicatePreset.mutate(preset.id);
+                    }}
+                    className="rounded-lg p-1.5 transition-all hover:bg-[var(--accent)] active:scale-90"
+                    title="Duplicate"
+                  >
+                    <Copy size="0.75rem" className="text-[var(--muted-foreground)]" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm(`Delete "${preset.name}"?`)) {
+                        deletePreset.mutate(preset.id);
+                      }
+                    }}
+                    className="rounded-lg p-1.5 transition-all hover:bg-[var(--destructive)]/15 active:scale-90"
+                    title="Delete"
                   >
                     <Trash2 size="0.75rem" className="text-[var(--destructive)]" />
                   </button>

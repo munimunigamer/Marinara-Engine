@@ -15,7 +15,7 @@ interface SpriteOverlayProps {
   /** The last N messages to detect expressions from */
   messages: Array<{ role: string; characterId?: string | null; content: string }>;
   /** Which side the sidebar / default sprite layout prefers */
-  side: SpriteSide;
+  side: SpriteSide | "center";
   /** Saved expressions per character (from chat metadata) */
   spriteExpressions?: Record<string, string>;
   /** Saved freeform placements per character (from chat metadata) */
@@ -26,6 +26,8 @@ interface SpriteOverlayProps {
   onExpressionChange?: (characterId: string, expression: string) => void;
   /** Called when a sprite is moved (to persist it) */
   onPlacementChange?: (characterId: string, placement: SpritePlacement) => void;
+  /** When true, only show full-body sprites (full_ prefix) and hide characters without any */
+  fullBodyOnly?: boolean;
 }
 
 type Transition = "crossfade" | "bounce" | "shake" | "hop" | "none";
@@ -71,6 +73,7 @@ export function SpriteOverlay({
   editing = false,
   onExpressionChange,
   onPlacementChange,
+  fullBodyOnly = false,
 }: SpriteOverlayProps) {
   const stageRef = useRef<HTMLDivElement>(null);
 
@@ -190,7 +193,10 @@ export function SpriteOverlay({
   if (visibleChars.length === 0) return null;
 
   return (
-    <div ref={stageRef} className="pointer-events-none absolute inset-0 z-[15] overflow-hidden">
+    <div
+      ref={stageRef}
+      className={`pointer-events-none absolute inset-0 overflow-hidden ${fullBodyOnly ? "z-[5]" : "z-[15]"}`}
+    >
       {visibleChars.map((charId, index) => (
         <CharacterSprite
           key={charId}
@@ -203,6 +209,7 @@ export function SpriteOverlay({
           zIndex={10 + index}
           stageRef={stageRef}
           onPlacementChange={onPlacementChange}
+          fullBodyOnly={fullBodyOnly}
         />
       ))}
 
@@ -273,6 +280,7 @@ function CharacterSprite({
   zIndex,
   stageRef,
   onPlacementChange,
+  fullBodyOnly = false,
 }: {
   characterId: string;
   expression: string;
@@ -283,6 +291,7 @@ function CharacterSprite({
   zIndex: number;
   stageRef: React.RefObject<HTMLDivElement | null>;
   onPlacementChange?: (characterId: string, placement: SpritePlacement) => void;
+  fullBodyOnly?: boolean;
 }) {
   const { data: sprites } = useCharacterSprites(characterId);
   const prevExpressionRef = useRef(expression);
@@ -299,7 +308,14 @@ function CharacterSprite({
 
   const spriteUrl = useMemo(() => {
     if (!sprites || !(sprites as SpriteInfo[]).length) return null;
-    const spriteList = sprites as SpriteInfo[];
+    let spriteList = sprites as SpriteInfo[];
+
+    // When fullBodyOnly is set, restrict to full-body sprites (full_ prefix)
+    if (fullBodyOnly) {
+      spriteList = spriteList.filter((s) => s.expression.toLowerCase().startsWith("full_"));
+      if (spriteList.length === 0) return null;
+    }
+
     const exprLower = expression.toLowerCase();
     const exact = spriteList.find((s) => s.expression.toLowerCase() === exprLower);
     if (exact) return exact.url;
@@ -310,18 +326,18 @@ function CharacterSprite({
     if (partial) return partial.url;
     const neutral = spriteList.find((s) => {
       const lower = s.expression.toLowerCase();
-      return lower === "neutral" || lower === "default";
+      return lower === "neutral" || lower === "default" || lower === "full_idle" || lower === "idle";
     });
     if (neutral) return neutral.url;
     return spriteList[0]?.url ?? null;
-  }, [sprites, expression]);
+  }, [sprites, expression, fullBodyOnly]);
 
   const sizeClass =
     spriteCount >= 3
-      ? "max-h-[44vh] max-w-[42vw] md:max-w-[26vw]"
+      ? "max-h-[50vh] max-w-[55vw] md:max-h-[44vh] md:max-w-[26vw]"
       : spriteCount === 2
-        ? "max-h-[52vh] max-w-[52vw] md:max-w-[32vw]"
-        : "max-h-[60vh] max-w-[68vw] md:max-w-[38vw]";
+        ? "max-h-[55vh] max-w-[60vw] md:max-h-[52vh] md:max-w-[32vw]"
+        : "max-h-[65vh] max-w-[80vw] md:max-h-[60vh] md:max-w-[38vw]";
 
   useEffect(() => {
     currentPlacementRef.current = currentPlacement;

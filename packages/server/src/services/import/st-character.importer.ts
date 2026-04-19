@@ -135,14 +135,9 @@ export async function importSTCharacter(
           },
         };
         data.extensions[IMPORT_METADATA_KEY] = updatedImportMetadata;
-        await storage.update(
-          charId,
-          { extensions: { ...data.extensions } },
-          undefined,
-          {
-            updatedAt: normalizedTimestamps?.updatedAt ?? normalizedTimestamps?.createdAt ?? null,
-          },
-        );
+        await storage.update(charId, { extensions: { ...data.extensions } }, undefined, {
+          updatedAt: normalizedTimestamps?.updatedAt ?? normalizedTimestamps?.createdAt ?? null,
+        });
       }
     } catch {
       // Non-fatal — character was imported, just lorebook extraction failed

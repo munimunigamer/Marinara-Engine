@@ -16,10 +16,12 @@ import {
   useCharacterSprites,
   useUploadSprite,
   useDeleteSprite,
+  spriteKeys,
   type SpriteInfo,
 } from "../../hooks/use-characters";
 import { useUIStore } from "../../stores/ui.store";
 import { lorebookKeys } from "../../hooks/use-lorebooks";
+import { SpriteGenerationModal } from "../ui/SpriteGenerationModal";
 import {
   ArrowLeft,
   Save,
@@ -50,6 +52,7 @@ import {
   Crop,
   Maximize2,
   ImageDown,
+  Wand2,
 } from "lucide-react";
 import { cn, getAvatarCropStyle } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -458,7 +461,13 @@ export function CharacterEditor() {
             {activeTab === "advanced" && (
               <AdvancedTab formData={formData} updateField={updateField} updateExtension={updateExtension} />
             )}
-            {activeTab === "sprites" && characterId && <SpritesTab characterId={characterId} />}
+            {activeTab === "sprites" && characterId && (
+              <SpritesTab
+                characterId={characterId}
+                defaultAppearance={(formData.extensions.appearance as string) ?? formData.description}
+                defaultAvatarUrl={avatarPreview}
+              />
+            )}
             {activeTab === "colors" && (
               <ColorsTab formData={formData} updateExtension={updateExtension} avatarUrl={avatarPreview} />
             )}
@@ -1118,29 +1127,58 @@ const DEFAULT_EXPRESSIONS = [
   "hurt",
 ];
 
-function SpritesTab({ characterId }: { characterId: string }) {
+function SpritesTab({
+  characterId,
+  defaultAppearance,
+  defaultAvatarUrl,
+}: {
+  characterId: string;
+  defaultAppearance?: string;
+  defaultAvatarUrl?: string | null;
+}) {
+  type SpriteCategory = "expressions" | "full-body";
+
   const { data: sprites, isLoading } = useCharacterSprites(characterId);
   const uploadSprite = useUploadSprite();
   const deleteSprite = useDeleteSprite();
+  const queryClient = useQueryClient();
+  const [category, setCategory] = useState<SpriteCategory>("expressions");
   const [newExpression, setNewExpression] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [folderProgress, setFolderProgress] = useState<{ done: number; total: number } | null>(null);
+  const [spriteGenOpen, setSpriteGenOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const pendingExpressionRef = useRef("");
 
-  const existingExpressions = new Set((sprites as SpriteInfo[] | undefined)?.map((s) => s.expression) ?? []);
+  const allSprites = (sprites as SpriteInfo[] | undefined) ?? [];
+  const visibleSprites = allSprites.filter((s) =>
+    category === "full-body" ? s.expression.startsWith("full_") : !s.expression.startsWith("full_"),
+  );
+  const existingExpressions = new Set(
+    visibleSprites.map((s) => (category === "full-body" ? s.expression.replace(/^full_/, "") : s.expression)),
+  );
   const suggestedExpressions = DEFAULT_EXPRESSIONS.filter((e) => !existingExpressions.has(e));
+
+  const normalizeExpressionForCategory = (raw: string) => {
+    const cleaned = raw
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, "_");
+    if (!cleaned) return "";
+    if (category === "full-body") {
+      return cleaned.startsWith("full_") ? cleaned : `full_${cleaned}`;
+    }
+    return cleaned.replace(/^full_/, "");
+  };
+
+  const displayExpression = (stored: string) => (category === "full-body" ? stored.replace(/^full_/, "") : stored);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const expression =
-      pendingExpressionRef.current ||
-      newExpression
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]/g, "_");
+    const expression = pendingExpressionRef.current || normalizeExpressionForCategory(newExpression);
     if (!expression) return;
 
     setUploading(true);
@@ -1164,6 +1202,7 @@ function SpritesTab({ characterId }: { characterId: string }) {
   };
 
   const startUpload = (expression: string) => {
+    if (!expression) return;
     pendingExpressionRef.current = expression;
     fileInputRef.current?.click();
   };
@@ -1182,12 +1221,9 @@ function SpritesTab({ characterId }: { characterId: string }) {
     for (let i = 0; i < imageFiles.length; i++) {
       const file = imageFiles[i]!;
       // Derive expression name from filename (strip extension, lowercase, sanitize)
-      const expression = file.name
-        .replace(/\.[^.]+$/, "")
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]/g, "_");
-      if (!expression) continue;
+      const expression = file.name.replace(/\.[^.]+$/, "").trim();
+      const normalized = normalizeExpressionForCategory(expression);
+      if (!normalized) continue;
 
       const dataUrl = await new Promise<string>((resolve) => {
         const reader = new FileReader();
@@ -1196,7 +1232,7 @@ function SpritesTab({ characterId }: { characterId: string }) {
       });
 
       try {
-        await uploadSprite.mutateAsync({ characterId, expression, image: dataUrl });
+        await uploadSprite.mutateAsync({ characterId, expression: normalized, image: dataUrl });
       } catch {
         // Skip failed uploads, continue with the rest
       }
@@ -1212,12 +1248,87 @@ function SpritesTab({ characterId }: { characterId: string }) {
     await deleteSprite.mutateAsync({ characterId, expression });
   };
 
+  const downloadSpriteFile = useCallback(async (sprite: SpriteInfo) => {
+    const response = await fetch(sprite.url);
+    if (!response.ok) {
+      throw new Error(`Failed to download ${sprite.expression}`);
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = sprite.filename || `${sprite.expression}.png`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  }, []);
+
+  const handleExportSprites = useCallback(
+    async (spritesToExport: SpriteInfo[], modeLabel: string) => {
+      if (spritesToExport.length === 0) return;
+
+      setExporting(true);
+      let successCount = 0;
+
+      try {
+        for (const sprite of spritesToExport) {
+          try {
+            await downloadSpriteFile(sprite);
+            successCount += 1;
+          } catch {
+            // Continue exporting remaining sprites.
+          }
+        }
+
+        if (successCount > 0) {
+          toast.success(
+            modeLabel === "all"
+              ? `Exported ${successCount} sprite${successCount === 1 ? "" : "s"}.`
+              : `Exported ${successCount} ${category === "full-body" ? "full-body" : "expression"} sprite${successCount === 1 ? "" : "s"}.`,
+          );
+        } else {
+          toast.error("No sprites were exported. Please try again.");
+        }
+      } finally {
+        setExporting(false);
+      }
+    },
+    [category, downloadSpriteFile],
+  );
+
   return (
     <div className="space-y-6">
       <SectionHeader
         title="Character Sprites"
         subtitle="Upload VN-style sprites for different expressions. The Expression Engine agent will select the appropriate sprite during roleplay."
       />
+
+      <div className="inline-flex rounded-xl bg-[var(--secondary)] p-1 ring-1 ring-[var(--border)]">
+        <button
+          onClick={() => setCategory("expressions")}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+            category === "expressions"
+              ? "bg-[var(--primary)]/15 text-[var(--primary)]"
+              : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+          )}
+        >
+          Facial Expressions
+        </button>
+        <button
+          onClick={() => setCategory("full-body")}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+            category === "full-body"
+              ? "bg-[var(--primary)]/15 text-[var(--primary)]"
+              : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]",
+          )}
+        >
+          Full-body
+        </button>
+      </div>
 
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
       <input
@@ -1238,15 +1349,43 @@ function SpritesTab({ characterId }: { characterId: string }) {
             <Upload size="0.8125rem" className="text-[var(--primary)]" />
             Add Sprite
           </h4>
-          <button
-            onClick={() => folderInputRef.current?.click()}
-            disabled={!!folderProgress}
-            className="flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.6875rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
-            title="Select a folder of PNGs — each filename becomes the expression name"
-          >
-            <FolderOpen size="0.8125rem" />
-            Upload Folder
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSpriteGenOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-purple-500/10 px-3 py-1.5 text-[0.6875rem] font-medium text-purple-400 ring-1 ring-purple-500/20 transition-all hover:bg-purple-500/20"
+              title="Generate sprites using AI image generation"
+            >
+              <Wand2 size="0.8125rem" />
+              Generate Sprite
+            </button>
+            <button
+              onClick={() => folderInputRef.current?.click()}
+              disabled={!!folderProgress}
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.6875rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+              title="Select a folder of PNGs — each filename becomes the expression name"
+            >
+              <FolderOpen size="0.8125rem" />
+              Upload Folder
+            </button>
+            <button
+              onClick={() => handleExportSprites(visibleSprites, "visible")}
+              disabled={exporting || visibleSprites.length === 0}
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.6875rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+              title="Download currently visible sprites for external editing"
+            >
+              <ImageDown size="0.8125rem" />
+              {exporting ? "Exporting..." : `Export ${category === "full-body" ? "Full-body" : "Expressions"}`}
+            </button>
+            <button
+              onClick={() => handleExportSprites(allSprites, "all")}
+              disabled={exporting || allSprites.length === 0}
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--secondary)] px-3 py-1.5 text-[0.6875rem] font-medium text-[var(--muted-foreground)] ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+              title="Download all sprites across both categories"
+            >
+              <ImageDown size="0.8125rem" />
+              Export All
+            </button>
+          </div>
         </div>
 
         {/* Folder upload progress */}
@@ -1260,14 +1399,20 @@ function SpritesTab({ characterId }: { characterId: string }) {
           <input
             value={newExpression}
             onChange={(e) => setNewExpression(e.target.value)}
-            placeholder="Expression name (e.g. happy, sad, angry)…"
+            placeholder={
+              category === "full-body"
+                ? "Pose name (e.g. idle, walk, battle_stance)…"
+                : "Expression name (e.g. happy, sad, angry)…"
+            }
             className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
             onKeyDown={(e) => {
-              if (e.key === "Enter" && newExpression.trim()) startUpload(newExpression.trim().toLowerCase());
+              if (e.key === "Enter" && newExpression.trim()) {
+                startUpload(normalizeExpressionForCategory(newExpression));
+              }
             }}
           />
           <button
-            onClick={() => newExpression.trim() && startUpload(newExpression.trim().toLowerCase())}
+            onClick={() => newExpression.trim() && startUpload(normalizeExpressionForCategory(newExpression))}
             disabled={!newExpression.trim() || uploading}
             className="flex items-center gap-1.5 rounded-xl bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] shadow-sm transition-all hover:shadow-md disabled:opacity-40"
           >
@@ -1277,7 +1422,7 @@ function SpritesTab({ characterId }: { characterId: string }) {
         </div>
 
         {/* Quick expression buttons */}
-        {suggestedExpressions.length > 0 && (
+        {category === "expressions" && suggestedExpressions.length > 0 && (
           <div>
             <p className="text-[0.625rem] text-[var(--muted-foreground)] mb-1.5">Quick add:</p>
             <div className="flex flex-wrap gap-1">
@@ -1302,9 +1447,9 @@ function SpritesTab({ characterId }: { characterId: string }) {
             <div key={i} className="shimmer aspect-[3/4] rounded-xl" />
           ))}
         </div>
-      ) : (sprites as SpriteInfo[] | undefined)?.length ? (
+      ) : visibleSprites.length ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-          {(sprites as SpriteInfo[]).map((sprite) => (
+          {visibleSprites.map((sprite) => (
             <div
               key={sprite.expression}
               className="group relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] transition-all hover:border-[var(--primary)]/30 hover:shadow-md"
@@ -1315,11 +1460,18 @@ function SpritesTab({ characterId }: { characterId: string }) {
               <div className="flex items-center justify-between p-2">
                 <span
                   className="max-w-[10rem] truncate text-[0.6875rem] font-medium capitalize"
-                  title={sprite.expression}
+                  title={displayExpression(sprite.expression)}
                 >
-                  {sprite.expression}
+                  {displayExpression(sprite.expression)}
                 </span>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => void downloadSpriteFile(sprite)}
+                    className="rounded-lg p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    title="Download"
+                  >
+                    <ImageDown size="0.6875rem" />
+                  </button>
                   <button
                     onClick={() => startUpload(sprite.expression)}
                     className="rounded-lg p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
@@ -1345,7 +1497,9 @@ function SpritesTab({ characterId }: { characterId: string }) {
           <div>
             <p className="text-sm font-medium text-[var(--muted-foreground)]">No sprites yet</p>
             <p className="mt-0.5 text-xs text-[var(--muted-foreground)]/60">
-              Upload expression sprites above. Use transparent PNGs for best results.
+              {category === "full-body"
+                ? "Upload full-body sprites above. Use transparent PNGs for best results."
+                : "Upload expression sprites above. Use transparent PNGs for best results."}
             </p>
           </div>
         </div>
@@ -1367,6 +1521,19 @@ function SpritesTab({ characterId }: { characterId: string }) {
           <li>• Sprites appear as VN-style overlays in the chat area</li>
         </ul>
       </div>
+
+      {/* Sprite Generation Modal */}
+      <SpriteGenerationModal
+        open={spriteGenOpen}
+        onClose={() => setSpriteGenOpen(false)}
+        entityId={characterId}
+        initialSpriteType={category === "full-body" ? "full-body" : "expressions"}
+        defaultAppearance={defaultAppearance}
+        defaultAvatarUrl={defaultAvatarUrl}
+        onSpritesGenerated={() => {
+          queryClient.invalidateQueries({ queryKey: spriteKeys.list(characterId) });
+        }}
+      />
     </div>
   );
 }
@@ -1503,8 +1670,8 @@ function StatsTab({
             <h4 className="mb-1.5 text-xs font-semibold">How stats work</h4>
             <ul className="space-y-1 text-[0.6875rem] text-[var(--muted-foreground)]">
               <li>
-                &bull; <strong className="text-[var(--foreground)]">HP</strong> — Injected into the prompt so
-                the AI knows the character&apos;s current health.
+                &bull; <strong className="text-[var(--foreground)]">HP</strong> — Injected into the prompt so the AI
+                knows the character&apos;s current health.
               </li>
               <li>
                 &bull; <strong className="text-[var(--foreground)]">Attributes</strong> — Custom stats (STR, DEX, etc.)
@@ -1749,13 +1916,7 @@ function ColorsTab({
   );
 }
 
-function LorebookTab({
-  characterId,
-  formData,
-}: {
-  characterId: string | null;
-  formData: CharacterData;
-}) {
+function LorebookTab({ characterId, formData }: { characterId: string | null; formData: CharacterData }) {
   const book = formData.character_book;
   const entries = book?.entries ?? [];
   const qc = useQueryClient();
@@ -1826,14 +1987,15 @@ function LorebookTab({
             <button
               type="button"
               onClick={() => openLorebookDetail(linkedLorebookId)}
-              className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)]/15 px-3 py-1.5 text-xs font-medium text-[var(--primary)] transition-all hover:bg-[var(--primary)]/25"
             >
-              Open Linked Lorebook
+              <Library size="0.75rem" />
+              Edit Linked Lorebook
             </button>
           )}
           <span className="text-[0.6875rem] text-[var(--muted-foreground)]">
             {linkedLorebookId
-              ? "Refreshes the linked lorebook in place so duplicates are not created."
+              ? "Opens the lorebook editor where you can add, edit, or delete entries."
               : "Imports this embedded lorebook into Marinara as a linked lorebook."}
           </span>
         </div>

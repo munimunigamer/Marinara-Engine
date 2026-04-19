@@ -6,7 +6,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
 
 function parseArgs(args) {
-  const [version, ...rest] = args;
+  // pnpm 10 forwards a literal `--` separator into argv; skip any leading `--` entries.
+  const filtered = args.filter((arg) => arg !== "--");
+  const [version, ...rest] = filtered;
   if (!version) {
     throw new Error("Usage: node scripts/render-release-notes.mjs <version> [--output <path>]");
   }
@@ -24,14 +26,25 @@ function parseArgs(args) {
 }
 
 function extractReleaseEntry(changelog, version) {
-  const heading = `## [${version}]`;
-  const start = changelog.indexOf(heading);
+  // Accept both historical `## [X.Y.Z]` and newer `## vX.Y.Z` heading formats.
+  const headingPatterns = [`## [${version}]`, `## v${version}`, `## ${version}`];
+  let start = -1;
+  let heading = "";
+  for (const candidate of headingPatterns) {
+    const idx = changelog.indexOf(candidate);
+    if (idx !== -1) {
+      start = idx;
+      heading = candidate;
+      break;
+    }
+  }
   if (start === -1) {
     throw new Error(`CHANGELOG.md does not contain an entry for ${version}`);
   }
 
   const afterHeading = changelog.slice(start + heading.length);
-  const nextSectionOffset = afterHeading.search(/\n## \[/);
+  // Next section may use either heading style.
+  const nextSectionOffset = afterHeading.search(/\n## (\[|v?\d)/);
   const body = (nextSectionOffset === -1 ? afterHeading : afterHeading.slice(0, nextSectionOffset)).trim();
 
   if (!body) {
