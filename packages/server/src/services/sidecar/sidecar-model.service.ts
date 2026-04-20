@@ -1,25 +1,30 @@
 // ──────────────────────────────────────────────
-// Sidecar Local Model — Model Lifecycle Service
+// Sidecar Local Model - Model Lifecycle Service
 //
-// Owns the persisted sidecar config plus GGUF
-// download/list/delete flows for curated and
-// custom HuggingFace models.
+// Owns the persisted sidecar config plus local
+// model download/list/delete flows for curated
+// and custom HuggingFace models, including the
+// Apple Silicon MLX-native path.
 // ──────────────────────────────────────────────
 
 import { basename, join, relative, resolve, sep } from "path";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
 import {
   SIDECAR_DEFAULT_CONFIG,
+  SIDECAR_MLX_MODELS,
   SIDECAR_MODELS,
+  type SidecarBackend,
   type SidecarConfig,
   type SidecarCustomModelEntry,
   type SidecarDownloadProgress,
+  type SidecarModelInfo,
   type SidecarQuantization,
   type SidecarStatus,
   type SidecarStatusResponse,
 } from "@marinara-engine/shared";
 import { getDataDir } from "../../utils/data-dir.js";
 import { downloadFileWithProgress, fetchJson, isAbortError } from "./sidecar-download.js";
+import { mlxRuntimeService } from "./mlx-runtime.service.js";
 import { sidecarRuntimeService } from "./sidecar-runtime.service.js";
 
 export const MODELS_DIR = join(getDataDir(), "models");
@@ -34,6 +39,19 @@ interface HuggingFaceTreeEntry {
   path?: string;
   size?: number;
   lfs?: { size?: number };
+}
+
+interface HuggingFaceModelApiResponse {
+  id?: string;
+  library_name?: string | null;
+  tags?: string[];
+  gguf?: unknown;
+  safetensors?: { total?: number } | null;
+  config?: {
+    quantization_config?: {
+      bits?: number;
+    };
+  } | null;
 }
 
 function normalizeRepoPath(repo: string): string {
@@ -72,6 +90,14 @@ function ensureWithinModelsDir(targetPath: string): string {
   return resolvedTarget;
 }
 
+function isMacAppleSilicon(): boolean {
+  return process.platform === "darwin" && process.arch === "arm64";
+}
+
+function repoLeaf(repo: string): string {
+  return repo.split("/").filter(Boolean).pop() ?? repo;
+}
+
 class SidecarModelService {
   private config: SidecarConfig;
   private status: SidecarStatus = "not_downloaded";
@@ -94,10 +120,11 @@ class SidecarModelService {
         const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as Partial<SidecarConfig>;
         nextConfig = { ...SIDECAR_DEFAULT_CONFIG, ...raw };
 
-        // v1.5.x configs only tracked the curated quantization. Migrate them to an explicit modelPath.
-        if (!nextConfig.modelPath && nextConfig.quantization) {
+        // v1.5.x configs only tracked the curated quantization. Migrate them to an explicit model ref.
+        if (!nextConfig.modelPath && !nextConfig.modelRepo && nextConfig.quantization) {
           const curated = SIDECAR_MODELS.find((model) => model.quantization === nextConfig.quantization);
           nextConfig.modelPath = curated?.filename ?? null;
+          nextConfig.backend = "llama_cpp";
           shouldRewrite = true;
         }
 
@@ -105,6 +132,22 @@ class SidecarModelService {
           nextConfig.modelPath = null;
           nextConfig.quantization = null;
           nextConfig.customModelRepo = null;
+          shouldRewrite = true;
+        }
+
+        const resolvedBackend = this.resolveBackend(nextConfig);
+        if (nextConfig.backend !== resolvedBackend) {
+          nextConfig.backend = resolvedBackend;
+          shouldRewrite = true;
+        }
+
+        if (resolvedBackend === "llama_cpp" && nextConfig.modelRepo) {
+          nextConfig.modelRepo = null;
+          shouldRewrite = true;
+        }
+
+        if (resolvedBackend === "mlx" && nextConfig.modelPath) {
+          nextConfig.modelPath = null;
           shouldRewrite = true;
         }
       }
@@ -129,7 +172,7 @@ class SidecarModelService {
   }
 
   private detectStatus(): SidecarStatus {
-    return this.getModelFilePath() ? "downloaded" : "not_downloaded";
+    return this.hasConfiguredModel() ? "downloaded" : "not_downloaded";
   }
 
   private isSafeRelativeModelPath(modelPath: string): boolean {
@@ -144,6 +187,149 @@ class SidecarModelService {
 
   private resolveModelPath(modelPath: string): string {
     return ensureWithinModelsDir(join(MODELS_DIR, modelPath));
+  }
+
+  private resolveBackend(config: SidecarConfig = this.config): SidecarBackend {
+    if (config.modelPath) {
+      return "llama_cpp";
+    }
+    if (config.backend === "mlx" && isMacAppleSilicon()) {
+      return "mlx";
+    }
+    if (config.modelRepo && isMacAppleSilicon()) {
+      return "mlx";
+    }
+    return isMacAppleSilicon() ? "mlx" : "llama_cpp";
+  }
+
+  private getCuratedModelsForCurrentPlatform(): SidecarModelInfo[] {
+    return isMacAppleSilicon() ? SIDECAR_MLX_MODELS : SIDECAR_MODELS;
+  }
+
+  private getModelFilePathForConfig(config: SidecarConfig = this.config): string | null {
+    if (!config.modelPath) return null;
+    const resolved = this.resolveModelPath(config.modelPath);
+    return existsSync(resolved) ? resolved : null;
+  }
+
+  private hasConfiguredModel(config: SidecarConfig = this.config): boolean {
+    return this.resolveBackend(config) === "mlx" ? !!config.modelRepo : this.getModelFilePathForConfig(config) !== null;
+  }
+
+  private getConfiguredModelSize(config: SidecarConfig = this.config): number | null {
+    if (this.resolveBackend(config) === "mlx") {
+      const curated = this.getCuratedModelsForCurrentPlatform().find(
+        (model) => model.repoId === config.modelRepo || model.quantization === config.quantization,
+      );
+      return curated?.sizeBytes ?? null;
+    }
+
+    const modelPath = this.getModelFilePathForConfig(config);
+    if (!modelPath) {
+      return null;
+    }
+
+    try {
+      return statSync(modelPath).size;
+    } catch {
+      return null;
+    }
+  }
+
+  private getModelDisplayName(config: SidecarConfig = this.config): string | null {
+    if (this.resolveBackend(config) === "mlx") {
+      if (!config.modelRepo) {
+        return null;
+      }
+
+      const curated = this.getCuratedModelsForCurrentPlatform().find((model) => model.repoId === config.modelRepo);
+      return curated?.label ?? repoLeaf(config.modelRepo);
+    }
+
+    const modelPath = this.getModelFilePathForConfig(config);
+    return modelPath && config.modelPath ? basename(config.modelPath) : null;
+  }
+
+  private async fetchRepoInfo(repo: string): Promise<HuggingFaceModelApiResponse> {
+    return await fetchJson<HuggingFaceModelApiResponse>(`https://huggingface.co/api/models/${repo}`);
+  }
+
+  private inferMlxQuantizationLabel(info: HuggingFaceModelApiResponse, entries: HuggingFaceTreeEntry[]): string | null {
+    const quantizationBits = info.config?.quantization_config?.bits;
+    if (typeof quantizationBits === "number" && Number.isFinite(quantizationBits)) {
+      return `${quantizationBits}-bit MLX`;
+    }
+
+    const tag = info.tags?.find((value) => /^\d+-bit$/i.test(value));
+    if (tag) {
+      return `${tag} MLX`;
+    }
+
+    const hasOptiqMetadata = entries.some((entry) => entry.path?.toLowerCase().endsWith("optiq_metadata.json"));
+    if (hasOptiqMetadata) {
+      return "OptiQ MLX";
+    }
+
+    return "MLX";
+  }
+
+  private inferMlxRepoSize(info: HuggingFaceModelApiResponse, entries: HuggingFaceTreeEntry[]): number | null {
+    const safetensorsTotal = info.safetensors?.total;
+    if (typeof safetensorsTotal === "number" && Number.isFinite(safetensorsTotal) && safetensorsTotal > 0) {
+      return safetensorsTotal;
+    }
+
+    const total = entries.reduce((sum, entry) => {
+      const isWeightFile = entry.path?.toLowerCase().endsWith(".safetensors");
+      if (!isWeightFile) {
+        return sum;
+      }
+      return sum + (entry.size ?? entry.lfs?.size ?? 0);
+    }, 0);
+    return total > 0 ? total : null;
+  }
+
+  private isMlxRepo(info: HuggingFaceModelApiResponse, entries: HuggingFaceTreeEntry[]): boolean {
+    const tags = new Set((info.tags ?? []).map((tag) => tag.toLowerCase()));
+    if (info.gguf || tags.has("gguf")) {
+      return false;
+    }
+
+    if ((info.library_name ?? "").toLowerCase() === "mlx" || tags.has("mlx")) {
+      return true;
+    }
+
+    const files = entries.map((entry) => entry.path?.toLowerCase() ?? "");
+    if (files.some((path) => path.endsWith(".gguf"))) {
+      return false;
+    }
+
+    const hasConfig = files.some((path) => path.endsWith("config.json"));
+    const hasTokenizer = files.some((path) => path.endsWith("tokenizer.json") || path.endsWith("tokenizer.model"));
+    const hasSafetensors = files.some((path) => path.endsWith(".safetensors"));
+    return hasConfig && hasTokenizer && hasSafetensors;
+  }
+
+  private async resolveCustomMlxRepo(repo: string): Promise<SidecarCustomModelEntry> {
+    const info = await this.fetchRepoInfo(repo);
+    const tags = new Set((info.tags ?? []).map((tag) => tag.toLowerCase()));
+    const isClearlyGguf = Boolean(info.gguf) || tags.has("gguf");
+    const isClearlyMlx = (info.library_name ?? "").toLowerCase() === "mlx" || tags.has("mlx");
+    const entries = isClearlyMlx || isClearlyGguf ? [] : await this.fetchRepoTree(repo);
+
+    if (!this.isMlxRepo(info, entries)) {
+      throw new Error(
+        "That repository does not look like an MLX model repo. On Apple Silicon, custom HuggingFace models must be MLX-native repos, not GGUF repos.",
+      );
+    }
+
+    return {
+      path: repo,
+      filename: repo,
+      sizeBytes: this.inferMlxRepoSize(info, entries),
+      quantizationLabel: this.inferMlxQuantizationLabel(info, entries),
+      downloadUrl: `https://huggingface.co/${repo}`,
+    };
   }
 
   private emitProgress(progress: SidecarDownloadProgress, inline?: ProgressCallback): void {
@@ -165,39 +351,48 @@ class SidecarModelService {
   }
 
   getStatus(): SidecarStatusResponse {
-    const modelPath = this.getModelFilePath();
-    let modelSize: number | null = null;
-
-    if (modelPath) {
-      try {
-        modelSize = statSync(modelPath).size;
-      } catch {
-        modelSize = null;
-      }
-    }
+    const backend = this.resolveBackend();
+    const runtime =
+      backend === "mlx"
+        ? mlxRuntimeService.getStatus()
+        : {
+            ...sidecarRuntimeService.getStatus(),
+            backend: "llama_cpp" as const,
+          };
 
     return {
       status: this.status,
-      config: { ...this.config },
-      modelDownloaded: modelPath !== null,
-      modelSize,
-      runtime: sidecarRuntimeService.getStatus(),
+      config: { ...this.config, backend },
+      modelDownloaded: this.hasConfiguredModel(),
+      modelDisplayName: this.getModelDisplayName(),
+      modelSize: this.getConfiguredModelSize(),
+      runtime,
       logPath: sidecarRuntimeService.getLogPath(),
+      platform: process.platform,
+      arch: process.arch,
+      curatedModels: this.getCuratedModelsForCurrentPlatform(),
+      runtimeDiagnostics: backend === "mlx" ? undefined : sidecarRuntimeService.getDiagnostics(),
     };
   }
 
   getConfig(): SidecarConfig {
-    return { ...this.config };
+    return { ...this.config, backend: this.resolveBackend() };
   }
 
   isEnabled(): boolean {
     return this.config.useForGameScene;
   }
 
+  getResolvedBackend(): SidecarBackend {
+    return this.resolveBackend();
+  }
+
+  getConfiguredModelRef(): string | null {
+    return this.resolveBackend() === "mlx" ? this.config.modelRepo : this.getModelFilePath();
+  }
+
   getModelFilePath(): string | null {
-    if (!this.config.modelPath) return null;
-    const resolved = this.resolveModelPath(this.config.modelPath);
-    return existsSync(resolved) ? resolved : null;
+    return this.getModelFilePathForConfig();
   }
 
   getModelRelativePath(): string | null {
@@ -213,24 +408,25 @@ class SidecarModelService {
   ): SidecarConfig {
     this.config = { ...this.config, ...partial };
     this.saveConfig();
-    if (this.status === "not_downloaded" && this.getModelFilePath()) {
+    if (this.status === "not_downloaded" && this.hasConfiguredModel()) {
       this.status = "downloaded";
     }
-    return { ...this.config };
+    return { ...this.config, backend: this.resolveBackend() };
   }
 
   async download(quantization: SidecarQuantization, onProgress?: ProgressCallback): Promise<void> {
-    const modelInfo = SIDECAR_MODELS.find((model) => model.quantization === quantization);
+    const modelInfo = this.getCuratedModelsForCurrentPlatform().find((model) => model.quantization === quantization);
     if (!modelInfo) {
       throw new Error(`Unknown sidecar quantization: ${quantization}`);
     }
 
-    const relativePath = modelInfo.filename;
-    const destination = this.resolveModelPath(relativePath);
-    if (existsSync(destination)) {
+    if (modelInfo.backend === "mlx") {
+      const repoId = modelInfo.repoId ?? modelInfo.filename;
       this.config = {
         ...this.config,
-        modelPath: relativePath,
+        backend: "mlx",
+        modelPath: null,
+        modelRepo: repoId,
         quantization,
         customModelRepo: null,
       };
@@ -250,6 +446,37 @@ class SidecarModelService {
       return;
     }
 
+    const relativePath = modelInfo.filename;
+    const destination = this.resolveModelPath(relativePath);
+    if (existsSync(destination)) {
+      this.config = {
+        ...this.config,
+        backend: "llama_cpp",
+        modelPath: relativePath,
+        modelRepo: null,
+        quantization,
+        customModelRepo: null,
+      };
+      this.saveConfig();
+      this.status = "downloaded";
+      this.emitProgress(
+        {
+          phase: "model",
+          status: "complete",
+          downloaded: modelInfo.sizeBytes,
+          total: modelInfo.sizeBytes,
+          speed: 0,
+          label: modelInfo.label,
+        },
+        onProgress,
+      );
+      return;
+    }
+
+    if (!modelInfo.downloadUrl) {
+      throw new Error(`The ${modelInfo.label} preset is missing a download URL.`);
+    }
+
     await this.downloadModelFile(
       {
         url: modelInfo.downloadUrl,
@@ -261,7 +488,9 @@ class SidecarModelService {
 
     this.config = {
       ...this.config,
+      backend: "llama_cpp",
       modelPath: relativePath,
+      modelRepo: null,
       quantization,
       customModelRepo: null,
     };
@@ -273,6 +502,10 @@ class SidecarModelService {
     const repo = normalizeRepoPath(repoInput);
     if (!isValidRepoPath(repo)) {
       throw new Error("Repository must be in owner/repo format");
+    }
+
+    if (isMacAppleSilicon()) {
+      return [await this.resolveCustomMlxRepo(repo)];
     }
 
     const entries = await this.fetchRepoTree(repo);
@@ -297,12 +530,38 @@ class SidecarModelService {
 
   async downloadCustomModel(
     repoInput: string,
-    modelPath: string,
+    modelPath?: string,
     onProgress?: ProgressCallback,
   ): Promise<SidecarCustomModelEntry> {
     const repo = normalizeRepoPath(repoInput);
     if (!isValidRepoPath(repo)) {
       throw new Error("Repository must be in owner/repo format");
+    }
+
+    if (isMacAppleSilicon()) {
+      const selected = await this.resolveCustomMlxRepo(repo);
+      this.config = {
+        ...this.config,
+        backend: "mlx",
+        modelPath: null,
+        modelRepo: repo,
+        quantization: null,
+        customModelRepo: repo,
+      };
+      this.saveConfig();
+      this.status = "downloaded";
+      this.emitProgress(
+        {
+          phase: "model",
+          status: "complete",
+          downloaded: selected.sizeBytes ?? 0,
+          total: selected.sizeBytes ?? 0,
+          speed: 0,
+          label: selected.filename,
+        },
+        onProgress,
+      );
+      return selected;
     }
 
     const models = await this.listHuggingFaceModels(repo);
@@ -338,7 +597,9 @@ class SidecarModelService {
 
     this.config = {
       ...this.config,
+      backend: "llama_cpp",
       modelPath: relativePath,
+      modelRepo: null,
       quantization: null,
       customModelRepo: repo,
     };
@@ -408,14 +669,20 @@ class SidecarModelService {
   }
 
   deleteModel(): void {
-    const modelPath = this.getModelFilePath();
-    if (modelPath && existsSync(modelPath)) {
-      unlinkSync(modelPath);
+    if (this.resolveBackend() === "mlx") {
+      mlxRuntimeService.clearModelCache();
+    } else {
+      const modelPath = this.getModelFilePath();
+      if (modelPath && existsSync(modelPath)) {
+        unlinkSync(modelPath);
+      }
     }
 
     this.config = {
       ...this.config,
+      backend: isMacAppleSilicon() ? "mlx" : "llama_cpp",
       modelPath: null,
+      modelRepo: null,
       quantization: null,
       customModelRepo: null,
     };

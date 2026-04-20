@@ -5,6 +5,7 @@
 // its OpenAI-compatible localhost HTTP API.
 // ──────────────────────────────────────────────
 
+import { randomUUID } from "crypto";
 import type { SceneAnalysis } from "@marinara-engine/shared";
 import { sanitizeApiError } from "../llm/base-provider.js";
 import { sidecarModelService } from "./sidecar-model.service.js";
@@ -29,6 +30,55 @@ const SCENE_ANALYSIS_MAX_TOKENS = 4096;
 type SidecarMessage = {
   role: "system" | "user" | "assistant";
   content: string;
+};
+
+type SidecarChatCompletionResponse = {
+  choices?: Array<{
+    message?: { content?: unknown; reasoning_content?: unknown };
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  timings?: {
+    prompt_n?: number;
+    prompt_ms?: number;
+    predicted_n?: number;
+    predicted_ms?: number;
+  };
+};
+
+type SidecarChatCompletionChunk = {
+  choices?: Array<{
+    delta?: {
+      content?: unknown;
+      reasoning_content?: unknown;
+    };
+    message?: {
+      content?: unknown;
+      reasoning_content?: unknown;
+    };
+  }>;
+};
+
+export type SidecarTestMessageOutput = {
+  content: string;
+  reasoning: string;
+  output: string;
+  nonce: string;
+  nonceVerified: boolean;
+  usage: {
+    promptTokens: number | null;
+    completionTokens: number | null;
+    totalTokens: number | null;
+  };
+  timings: {
+    promptTokens: number | null;
+    promptMs: number | null;
+    predictedTokens: number | null;
+    predictedMs: number | null;
+  };
 };
 
 function extractContentText(content: unknown): string {
@@ -61,6 +111,16 @@ function extractJsonPayload<T>(raw: string): T {
     }
     throw new Error("Sidecar returned invalid JSON");
   }
+}
+
+function extractChoiceContent(choice: {
+  delta?: { content?: unknown; reasoning_content?: unknown };
+  message?: { content?: unknown; reasoning_content?: unknown };
+} | null | undefined): { content: string; reasoning: string } {
+  return {
+    content: extractContentText(choice?.delta?.content ?? choice?.message?.content),
+    reasoning: extractContentText(choice?.delta?.reasoning_content ?? choice?.message?.reasoning_content),
+  };
 }
 
 async function streamChatCompletion(options: {
@@ -100,6 +160,7 @@ async function streamChatCompletion(options: {
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
+  let reasoning = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -119,20 +180,13 @@ async function streamChatCompletion(options: {
       }
 
       try {
-        const parsed = JSON.parse(data) as {
-          choices?: Array<{
-            delta?: { content?: unknown };
-            message?: { content?: unknown };
-          }>;
-        };
+        const parsed = JSON.parse(data) as SidecarChatCompletionChunk;
 
         const choice = parsed.choices?.[0];
         if (!choice) continue;
-        if (choice.delta?.content !== undefined) {
-          content += extractContentText(choice.delta.content);
-        } else if (choice.message?.content !== undefined) {
-          content += extractContentText(choice.message.content);
-        }
+        const extracted = extractChoiceContent(choice);
+        content += extracted.content;
+        reasoning += extracted.reasoning;
       } catch {
         // Ignore malformed chunks and keep streaming.
       }
@@ -143,17 +197,12 @@ async function streamChatCompletion(options: {
     const trailing = buffer.trim().slice(6);
     if (trailing !== "[DONE]") {
       try {
-        const parsed = JSON.parse(trailing) as {
-          choices?: Array<{
-            delta?: { content?: unknown };
-            message?: { content?: unknown };
-          }>;
-        };
+        const parsed = JSON.parse(trailing) as SidecarChatCompletionChunk;
         const choice = parsed.choices?.[0];
-        if (choice?.delta?.content !== undefined) {
-          content += extractContentText(choice.delta.content);
-        } else if (choice?.message?.content !== undefined) {
-          content += extractContentText(choice.message.content);
+        if (choice) {
+          const extracted = extractChoiceContent(choice);
+          content += extracted.content;
+          reasoning += extracted.reasoning;
         }
       } catch {
         // Ignore malformed trailing chunk.
@@ -161,7 +210,98 @@ async function streamChatCompletion(options: {
     }
   }
 
-  return content;
+  const trimmedContent = content.trim();
+  if (trimmedContent) {
+    return trimmedContent;
+  }
+
+  return reasoning.trim();
+}
+
+export async function runTestMessage(): Promise<SidecarTestMessageOutput> {
+  return withRequestTracking(async () => {
+    if (!sidecarModelService.getConfiguredModelRef()) {
+      throw new Error("Download or select a local model before running a test message.");
+    }
+
+    const config = sidecarModelService.getConfig();
+    const shouldKeepRunning = config.useForTrackers || config.useForGameScene;
+    const baseUrl = await sidecarProcessService.ensureReady(true);
+    const nonce = `marinara-${randomUUID().slice(0, 8)}`;
+
+    try {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "local-sidecar",
+          stream: false,
+          messages: [
+            {
+              role: "system",
+              content: "You are a local runtime smoke test. Follow the user's format exactly and do not omit the verification token.",
+            },
+            {
+              role: "user",
+              content: `Reply in exactly two lines.
+Line 1: TOKEN ${nonce}
+Line 2: one short sentence confirming that the local sidecar test succeeded.`,
+            },
+          ] satisfies SidecarMessage[],
+          max_tokens: 48,
+          temperature: 0.2,
+          top_p: 0.9,
+          reasoning_format: "none",
+          chat_template_kwargs: { enable_thinking: false },
+        }),
+        signal: AbortSignal.timeout(45_000),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`llama-server error ${response.status}: ${sanitizeApiError(errorText || response.statusText)}`);
+      }
+
+      const payload = (await response.json()) as SidecarChatCompletionResponse;
+      const message = payload.choices?.[0]?.message;
+      const content = extractContentText(message?.content).trim();
+      const reasoning = extractContentText(message?.reasoning_content).trim();
+      const output = content || reasoning;
+      if (!output) {
+        throw new Error("The local sidecar test returned an empty response.");
+      }
+
+      const nonceVerified = output.includes(nonce);
+      if (!nonceVerified) {
+        throw new Error("The local sidecar test returned text, but it did not echo the verification token.");
+      }
+
+      return {
+        content: content.slice(0, 500),
+        reasoning: reasoning.slice(0, 500),
+        output: output.slice(0, 500),
+        nonce,
+        nonceVerified,
+        usage: {
+          promptTokens: payload.usage?.prompt_tokens ?? null,
+          completionTokens: payload.usage?.completion_tokens ?? null,
+          totalTokens: payload.usage?.total_tokens ?? null,
+        },
+        timings: {
+          promptTokens: payload.timings?.prompt_n ?? null,
+          promptMs: payload.timings?.prompt_ms ?? null,
+          predictedTokens: payload.timings?.predicted_n ?? null,
+          predictedMs: payload.timings?.predicted_ms ?? null,
+        },
+      };
+    } finally {
+      if (!shouldKeepRunning) {
+        await sidecarProcessService.stop().catch(() => {});
+      }
+    }
+  });
 }
 
 export async function unloadModel(): Promise<void> {
@@ -284,12 +424,12 @@ export async function runTrackerPrompt(systemPrompt: string, userPrompt: string)
 }
 
 export async function isInferenceAvailable(): Promise<boolean> {
-  if (!sidecarModelService.getModelFilePath() || !sidecarModelService.isEnabled()) {
+  if (!sidecarModelService.getConfiguredModelRef() || !sidecarModelService.isEnabled()) {
     return false;
   }
 
   try {
-    await sidecarProcessService.syncForCurrentConfig();
+    await sidecarProcessService.syncForCurrentConfig({ suppressKnownFailure: true });
   } catch {
     return false;
   }

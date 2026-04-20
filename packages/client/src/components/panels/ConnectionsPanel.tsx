@@ -13,7 +13,19 @@ import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
 import { useSidecarStore } from "../../stores/sidecar.store";
 import { BUILT_IN_AGENTS, LOCAL_SIDECAR_CONNECTION_ID, getDefaultAgentPrompt } from "@marinara-engine/shared";
-import { Plus, Trash2, Link, Check, Shuffle, ExternalLink, X, Copy, BrainCircuit, Download, Trash } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Link,
+  Check,
+  Shuffle,
+  ExternalLink,
+  X,
+  Copy,
+  BrainCircuit,
+  Download,
+  Trash,
+} from "lucide-react";
 import { cn } from "../../lib/utils";
 import { toast } from "sonner";
 
@@ -40,16 +52,33 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+function formatRuntimeVariantLabel(variant: string | null): string | null {
+  if (!variant) return null;
+  return variant.replace(/-/g, " ");
+}
+
 function SidecarCard() {
   const { data: agentConfigs } = useAgentConfigs();
   const createAgent = useCreateAgent();
-  const updateAgent = useUpdateAgent();
-  const { status, config, modelDownloaded, modelSize, setShowDownloadModal, updateConfig, deleteModel, fetchStatus } =
-    useSidecarStore();
+  const updateAgentConnection = useUpdateAgent();
+  const {
+    status,
+    config,
+    modelDownloaded,
+    modelDisplayName,
+    modelSize,
+    startupError,
+    failedRuntimeVariant,
+    setShowDownloadModal,
+    updateConfig,
+    deleteModel,
+    fetchStatus,
+  } = useSidecarStore();
   const isDownloaded = modelDownloaded;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [assigningTrackers, setAssigningTrackers] = useState(false);
-  const activeModelName = isDownloaded ? (config.modelPath?.split("/").pop() ?? null) : null;
+  const activeModelName = isDownloaded ? modelDisplayName : null;
+  const backendLabel = config.backend === "mlx" ? "MLX" : "GGUF";
   const trackerAgents = useMemo(() => BUILT_IN_AGENTS.filter((agent) => agent.category === "tracker"), []);
   const trackerLocalCount = useMemo(() => {
     const configs = (agentConfigs ?? []) as Array<{ type: string; connectionId: string | null }>;
@@ -79,7 +108,7 @@ function SidecarCard() {
           const existing = configByType.get(agent.id);
           if (existing) {
             if (existing.connectionId === LOCAL_SIDECAR_CONNECTION_ID) return;
-            await updateAgent.mutateAsync({ id: existing.id, connectionId: LOCAL_SIDECAR_CONNECTION_ID });
+            await updateAgentConnection.mutateAsync({ id: existing.id, connectionId: LOCAL_SIDECAR_CONNECTION_ID });
             return;
           }
 
@@ -114,7 +143,7 @@ function SidecarCard() {
           <div className="text-sm font-medium">Local Model</div>
           <div className="text-[0.6875rem] text-[var(--muted-foreground)]">
             {isDownloaded
-              ? `${activeModelName ?? "Model"}${modelSize ? ` • ${formatBytes(modelSize)}` : ""}${
+              ? `${activeModelName ?? "Model"} • ${backendLabel}${modelSize ? ` • ${formatBytes(modelSize)}` : ""}${
                   status === "starting_server"
                     ? " • Starting"
                     : status === "server_error"
@@ -194,6 +223,27 @@ function SidecarCard() {
           </p>
           <button
             type="button"
+            onClick={() => updateConfig({ useForTrackers: !config.useForTrackers })}
+            className="flex items-center gap-2.5 cursor-pointer select-none text-left"
+          >
+            <div className="relative shrink-0">
+              <div
+                className={cn(
+                  "h-4 w-7 rounded-full transition-colors",
+                  config.useForTrackers ? "bg-purple-400/70" : "bg-[var(--border)]",
+                )}
+              />
+              <div
+                className={cn(
+                  "absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform",
+                  config.useForTrackers && "translate-x-3",
+                )}
+              />
+            </div>
+            <span className="text-xs text-[var(--muted-foreground)]">Use for tracker agents (roleplay)</span>
+          </button>
+          <button
+            type="button"
             onClick={() => updateConfig({ useForGameScene: !config.useForGameScene })}
             className="flex items-center gap-2.5 cursor-pointer select-none text-left"
           >
@@ -212,6 +262,28 @@ function SidecarCard() {
               />
             </div>
             <span className="text-xs text-[var(--muted-foreground)]">Use for game scene analysis</span>
+          </button>
+        </div>
+      )}
+      {status === "server_error" && (
+        <div className="mt-2.5 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5">
+          <div className="text-[0.6875rem] font-medium text-amber-200">Local runtime unavailable</div>
+          <div className="mt-1 text-[0.6875rem] text-[var(--muted-foreground)]/75">
+            {startupError ?? "Marinara will keep running without the local model until you retry."}
+          </div>
+          {failedRuntimeVariant && (
+            <div className="mt-1 text-[0.6875rem] text-[var(--muted-foreground)]/60">
+              Runtime: {formatRuntimeVariantLabel(failedRuntimeVariant)}
+            </div>
+          )}
+          <button
+            onClick={() => {
+              fetchStatus();
+              setShowDownloadModal(true);
+            }}
+            className="mt-2 rounded-lg bg-amber-500/15 px-2.5 py-1 text-[0.6875rem] font-medium text-amber-200 transition-colors hover:bg-amber-500/25"
+          >
+            Open Local AI Model
           </button>
         </div>
       )}

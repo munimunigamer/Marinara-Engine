@@ -625,6 +625,11 @@ export function GameSurface({
   const sceneAnalysis = useSceneAnalysis();
   const sidecarConfig = useSidecarStore((s) => s.config);
   const sidecarReady = useSidecarStore((s) => s.inferenceReady);
+  const sidecarStatus = useSidecarStore((s) => s.status);
+  const sidecarStartupError = useSidecarStore((s) => s.startupError);
+  const sidecarFailedRuntimeVariant = useSidecarStore((s) => s.failedRuntimeVariant);
+  const openSidecarModal = useSidecarStore((s) => s.setShowDownloadModal);
+  const refreshSidecarStatus = useSidecarStore((s) => s.fetchStatus);
 
   // Process GM tags from the latest assistant message
   const latestAssistantMsg = useMemo(() => {
@@ -2256,6 +2261,7 @@ export function GameSurface({
   // Once ALL conditions are met for the first time the screen never returns.
   // sceneProcessed is computed above (near scenePreparing).
   const firstTurnFullyReady = hasEverHadContent && !isStreaming && sceneProcessed && !pendingAssetGeneration;
+  const sidecarStartupFailed = sidecarConfig.useForGameScene && sidecarStatus === "server_error" && !sidecarReady;
   // Don't auto-dismiss: wait for user to click Continue after typewriter finishes.
 
   const awaitingFirstTurn = sessionStatus === "active" && !introPresented;
@@ -2696,6 +2702,36 @@ export function GameSurface({
                 {weatherEffectsEnabled && (gameSnapshot?.weather || gameSnapshot?.time) && (
                   <div className="pointer-events-none absolute inset-0 z-[1]">
                     <WeatherEffects weather={gameSnapshot?.weather ?? null} timeOfDay={gameSnapshot?.time ?? null} />
+                  </div>
+                )}
+
+                {sidecarStartupFailed && (
+                  <div className="pointer-events-auto absolute top-4 left-1/2 z-30 w-[min(92vw,42rem)] -translate-x-1/2">
+                    <div className="rounded-xl border border-amber-500/20 bg-black/80 px-4 py-3 shadow-lg backdrop-blur-sm">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-medium text-amber-200">Local scene helper failed to start</div>
+                          <div className="mt-1 text-[0.6875rem] leading-relaxed text-white/70">
+                            Marinara will keep the game running without the local sidecar for now.
+                            {sidecarFailedRuntimeVariant && ` Runtime: ${sidecarFailedRuntimeVariant.replace(/-/g, " ")}.`}
+                            {sidecarStartupError ? ` ${sidecarStartupError}.` : ""}
+                          </div>
+                          <div className="mt-1 text-[0.6875rem] leading-relaxed text-white/55">
+                            Open Local AI Model to retry startup, switch models, or disable local scene analysis temporarily.
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            void refreshSidecarStatus();
+                            openSidecarModal(true);
+                          }}
+                          className="rounded-lg bg-white/10 px-3 py-1.5 text-[0.6875rem] font-medium text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+                        >
+                          Open Local AI Model
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
 

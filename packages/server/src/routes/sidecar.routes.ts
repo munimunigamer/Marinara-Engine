@@ -6,11 +6,13 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import { sidecarModelService } from "../services/sidecar/sidecar-model.service.js";
+import { mlxRuntimeService } from "../services/sidecar/mlx-runtime.service.js";
 import { sidecarRuntimeService } from "../services/sidecar/sidecar-runtime.service.js";
 import {
   analyzeScene,
   isInferenceAvailable,
   isInferenceBusy,
+  runTestMessage,
   runTrackerPrompt,
   unloadModel,
 } from "../services/sidecar/sidecar-inference.service.js";
@@ -41,7 +43,7 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/status", async () => {
-    void sidecarProcessService.syncForCurrentConfig().catch((error) => {
+    void sidecarProcessService.syncForCurrentConfig({ suppressKnownFailure: true }).catch((error) => {
       console.error("[sidecar] Background sync from /status failed:", error);
     });
 
@@ -49,6 +51,8 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
     return {
       ...status,
       inferenceReady: sidecarProcessService.isReady(),
+      startupError: sidecarProcessService.getStartupError(),
+      failedRuntimeVariant: sidecarProcessService.getFailedRuntimeVariant(),
     };
   });
 
@@ -62,10 +66,46 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
   app.patch("/config", async (req) => {
     const body = configSchema.parse(req.body);
     const config = sidecarModelService.updateConfig(body);
-    void sidecarProcessService.syncForCurrentConfig().catch((error) => {
+    void sidecarProcessService.syncForCurrentConfig({ suppressKnownFailure: true }).catch((error) => {
       console.error("[sidecar] Background sync from /config failed:", error);
     });
     return { config };
+  });
+
+  app.post("/restart", async () => {
+    await sidecarProcessService.restart();
+    return { ok: true };
+  });
+
+  app.post("/test-message", async () => {
+    const startedAt = Date.now();
+    try {
+      const result = await runTestMessage();
+      return {
+        success: true,
+        response: result.output,
+        messageContent: result.content,
+        reasoningContent: result.reasoning,
+        nonce: result.nonce,
+        nonceVerified: result.nonceVerified,
+        usage: result.usage,
+        timings: result.timings,
+        latencyMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        response: "",
+        latencyMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : "Local sidecar test failed",
+        failedRuntimeVariant: sidecarProcessService.getFailedRuntimeVariant(),
+      };
+    }
+  });
+
+  app.post("/reinstall", async () => {
+    await sidecarProcessService.reinstallRuntime();
+    return { ok: true };
   });
 
   const listCustomModelsSchema = z.object({
@@ -128,12 +168,12 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{
-    Body: { repo: string; modelPath: string };
+    Body: { repo: string; modelPath?: string };
   }>("/download/custom", async (req, reply) => {
     const body = z
       .object({
         repo: hfRepoSchema,
-        modelPath: z.string().min(1),
+        modelPath: z.string().min(1).optional(),
       })
       .parse(req.body);
 
@@ -145,6 +185,7 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/download/cancel", async () => {
     sidecarModelService.cancelDownload();
+    mlxRuntimeService.cancelInstall();
     sidecarRuntimeService.cancelInstall();
     return { ok: true };
   });

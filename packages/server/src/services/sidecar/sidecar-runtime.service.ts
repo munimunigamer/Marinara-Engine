@@ -10,10 +10,17 @@ import {
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "fs";
-import { join, relative, resolve, sep } from "path";
-import type { SidecarDownloadProgress, SidecarRuntimeInfo } from "@marinara-engine/shared";
+import { basename, dirname, join, relative, resolve, sep } from "path";
+import type {
+  SidecarBackend,
+  SidecarDownloadProgress,
+  SidecarRuntimeDiagnostics,
+  SidecarRuntimeInfo,
+  SidecarRuntimeSource,
+} from "@marinara-engine/shared";
 import { getDataDir } from "../../utils/data-dir.js";
 import { downloadFileWithProgress, fetchJson, isAbortError, retry } from "./sidecar-download.js";
 
@@ -43,11 +50,15 @@ interface RuntimeRecord {
   directoryName: string;
   serverRelativePath: string;
   installedAt: string;
+  source?: SidecarRuntimeSource;
 }
 
 export interface SidecarRuntimeInstall extends RuntimeRecord {
   directoryPath: string;
   serverPath: string;
+  source: SidecarRuntimeSource;
+  systemPath?: string | null;
+  gpuCapable?: boolean;
 }
 
 interface RuntimeMatch {
@@ -55,12 +66,18 @@ interface RuntimeMatch {
   asset: GitHubReleaseAsset;
 }
 
+type GpuVendor = "nvidia" | "amd" | "intel";
+
 interface RuntimeCapabilities {
   platform: NodeJS.Platform;
   arch: string;
+  gpuVendors: GpuVendor[];
   preferCuda: boolean;
+  preferHip: boolean;
   preferRocm: boolean;
+  preferSycl: boolean;
   preferVulkan: boolean;
+  systemLlamaPath: string | null;
 }
 
 function ensureWithinRuntimeDir(targetPath: string): string {
@@ -121,12 +138,20 @@ function findExecutableRecursive(dirPath: string, expectedName: string): string 
   return null;
 }
 
+function parseBooleanEnv(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^(1|true|yes|on)$/i.test(value.trim());
+}
+
 class SidecarRuntimeService {
   private installPromise: Promise<SidecarRuntimeInstall> | null = null;
   private installAbort: AbortController | null = null;
+  private diagnosticsCache: { value: SidecarRuntimeDiagnostics; expiresAt: number } | null = null;
+  private diagnosticsRefreshPromise: Promise<void> | null = null;
 
   constructor() {
     mkdirSync(RUNTIME_DIR, { recursive: true });
+    this.refreshDiagnosticsInBackground();
   }
 
   getLogPath(): string {
@@ -139,12 +164,79 @@ class SidecarRuntimeService {
   }
 
   getStatus(): SidecarRuntimeInfo {
+    const diagnostics = this.getDiagnostics();
+    const systemInstall = this.getSystemInstallSync(diagnostics);
     const current = this.getCurrentInstall();
+    const activeInstall = systemInstall ?? current;
     return {
-      installed: current !== null,
-      build: current?.build ?? null,
-      variant: current?.variant ?? null,
+      installed: activeInstall !== null,
+      build: activeInstall?.build ?? null,
+      variant: activeInstall?.variant ?? null,
+      backend: "llama_cpp",
+      source: activeInstall?.source ?? null,
+      systemPath: diagnostics.systemLlamaPath,
     };
+  }
+
+  getDiagnostics(): SidecarRuntimeDiagnostics {
+    if (this.diagnosticsCache && this.diagnosticsCache.expiresAt > Date.now()) {
+      return this.diagnosticsCache.value;
+    }
+
+    const fallback = this.buildFallbackDiagnostics();
+    if (!this.diagnosticsCache) {
+      this.diagnosticsCache = {
+        value: fallback,
+        expiresAt: Date.now() + 5_000,
+      };
+    }
+
+    this.refreshDiagnosticsInBackground();
+    return fallback;
+  }
+
+  setLaunchDiagnostics(command: string | null, backend: SidecarBackend | null): void {
+    const current = this.diagnosticsCache?.value ?? this.buildFallbackDiagnostics();
+    this.diagnosticsCache = {
+      value: {
+        ...current,
+        launchCommand: command,
+        launchBackend: backend,
+      },
+      expiresAt: Date.now() + 60_000,
+    };
+  }
+
+  private buildFallbackDiagnostics(): SidecarRuntimeDiagnostics {
+    const current = this.diagnosticsCache?.value;
+    return {
+      gpuVendors: current?.gpuVendors ?? [],
+      preferCuda: current?.preferCuda ?? false,
+      preferHip: current?.preferHip ?? false,
+      preferRocm: current?.preferRocm ?? existsSync("/opt/rocm"),
+      preferSycl: current?.preferSycl ?? false,
+      preferVulkan:
+        current?.preferVulkan ??
+        (process.platform === "linux"
+          ? ["/usr/lib/libvulkan.so", "/usr/lib64/libvulkan.so", "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"].some((path) => existsSync(path))
+          : false),
+      systemLlamaPath: current?.systemLlamaPath ?? null,
+      launchCommand: current?.launchCommand ?? null,
+      launchBackend: current?.launchBackend ?? null,
+    };
+  }
+
+  private refreshDiagnosticsInBackground(): void {
+    if (this.diagnosticsRefreshPromise) {
+      return;
+    }
+
+    this.diagnosticsRefreshPromise = this.detectCapabilities()
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        this.diagnosticsRefreshPromise = null;
+      });
   }
 
   getCurrentInstall(): SidecarRuntimeInstall | null {
@@ -164,15 +256,30 @@ class SidecarRuntimeService {
         ...record,
         directoryPath,
         serverPath,
+        source: record.source ?? "bundled",
+        systemPath: null,
       };
     } catch {
       return null;
     }
   }
 
-  async ensureInstalled(onProgress?: (progress: SidecarDownloadProgress) => void): Promise<SidecarRuntimeInstall> {
+  isGpuVariant(variant: string): boolean {
+    return /(cuda|rocm|vulkan|metal|hip|sycl)/i.test(variant);
+  }
+
+  async ensureInstalled(
+    onProgress?: (progress: SidecarDownloadProgress) => void,
+    options?: { excludeVariants?: string[] },
+  ): Promise<SidecarRuntimeInstall> {
+    const excludedVariants = new Set(options?.excludeVariants ?? []);
+    const systemInstall = await this.getSystemInstall();
+    if (systemInstall && !excludedVariants.has(systemInstall.variant)) {
+      return systemInstall;
+    }
+
     const current = this.getCurrentInstall();
-    if (current && this.isInstallUsable(current)) {
+    if (current && this.isInstallUsable(current) && !excludedVariants.has(current.variant)) {
       return current;
     }
 
@@ -180,17 +287,24 @@ class SidecarRuntimeService {
       return this.installPromise;
     }
 
-    this.installPromise = this.installLatest(onProgress).finally(() => {
+    this.installPromise = this.installLatest(onProgress, excludedVariants).finally(() => {
       this.installPromise = null;
     });
     return this.installPromise;
   }
 
   private isInstallUsable(install: SidecarRuntimeInstall): boolean {
+    if (install.source === "system") {
+      return !!install.serverPath;
+    }
     return install.platform === process.platform && install.arch === process.arch && existsSync(install.serverPath);
   }
 
   private writeCurrentInstall(install: SidecarRuntimeInstall): void {
+    if (install.source === "system") {
+      return;
+    }
+
     const record: RuntimeRecord = {
       build: install.build,
       variant: install.variant,
@@ -200,12 +314,42 @@ class SidecarRuntimeService {
       directoryName: install.directoryName,
       serverRelativePath: install.serverRelativePath,
       installedAt: install.installedAt,
+      source: install.source,
     };
     writeFileSync(CURRENT_RUNTIME_PATH, JSON.stringify(record, null, 2), "utf-8");
   }
 
+  resetRuntime(): void {
+    this.cancelInstall();
+    const current = this.getCurrentInstall();
+    if (current?.source === "bundled") {
+      rmSync(current.directoryPath, { recursive: true, force: true });
+    }
+
+    for (const entry of readdirSync(RUNTIME_DIR, { withFileTypes: true })) {
+      if (entry.name === "mlx" || entry.name === "server.log") {
+        continue;
+      }
+
+      const fullPath = join(RUNTIME_DIR, entry.name);
+      if (entry.name === "current.json") {
+        unlinkSync(fullPath);
+        continue;
+      }
+
+      const isBundledArtifact =
+        /^llama-/i.test(entry.name) ||
+        /\.(extract|zip)$/i.test(entry.name) ||
+        entry.name.endsWith(".tar.gz");
+      if (isBundledArtifact || entry.isDirectory()) {
+        rmSync(fullPath, { recursive: true, force: true });
+      }
+    }
+  }
+
   private async installLatest(
     onProgress?: (progress: SidecarDownloadProgress) => void,
+    excludedVariants: Set<string> = new Set(),
   ): Promise<SidecarRuntimeInstall> {
     const abortController = new AbortController();
     this.installAbort = abortController;
@@ -230,11 +374,9 @@ class SidecarRuntimeService {
         },
       );
 
-      const match = await this.selectBestAsset(release.assets);
+      const match = await this.selectBestAsset(release.assets, excludedVariants);
       if (!match) {
-        throw new Error(
-          `Your platform (${process.platform}/${process.arch}) is not supported for local inference yet.`,
-        );
+        throw new Error(`Your platform (${process.platform}/${process.arch}) is not supported for local inference yet.`);
       }
 
       const directoryName = `${release.tag_name}-${match.variant}`;
@@ -281,6 +423,9 @@ class SidecarRuntimeService {
         installedAt: new Date().toISOString(),
         directoryPath: finalDirectory,
         serverPath: finalExecutable,
+        source: "bundled",
+        systemPath: null,
+        gpuCapable: this.isGpuVariant(match.variant),
       };
       this.writeCurrentInstall(install);
       return install;
@@ -369,19 +514,52 @@ class SidecarRuntimeService {
   private async detectCapabilities(): Promise<RuntimeCapabilities> {
     const platform = process.platform;
     const arch = process.arch;
+    const gpuVendors =
+      platform === "win32"
+        ? await this.detectWindowsGpuVendors()
+        : platform === "linux"
+          ? await this.detectLinuxGpuVendors()
+          : [];
+    const hasNvidia = gpuVendors.includes("nvidia") || (arch === "x64" && (await commandSucceeds("nvidia-smi")));
+    const hasAmd = gpuVendors.includes("amd");
+    const hasIntel = gpuVendors.includes("intel");
 
-    const preferCuda = arch === "x64" && (await commandSucceeds("nvidia-smi"));
+    const preferCuda = arch === "x64" && hasNvidia;
+    const preferHip = platform === "win32" && arch === "x64" && hasAmd;
     const preferRocm =
-      platform === "linux" && arch === "x64" && ((await commandSucceeds("rocm-smi")) || existsSync("/opt/rocm"));
+      platform === "linux" && arch === "x64" && (hasAmd || (await commandSucceeds("rocm-smi")) || existsSync("/opt/rocm"));
+    const preferSycl = platform === "win32" && arch === "x64" && hasIntel;
     const preferVulkan = await this.detectVulkanSupport(platform);
+    const systemLlamaPath = await this.detectSystemLlamaPath();
 
-    return {
+    const diagnostics = {
       platform,
       arch,
+      gpuVendors,
       preferCuda,
+      preferHip,
       preferRocm,
+      preferSycl,
       preferVulkan,
+      systemLlamaPath,
+    } satisfies RuntimeCapabilities;
+
+    this.diagnosticsCache = {
+      value: {
+        gpuVendors,
+        preferCuda,
+        preferHip,
+        preferRocm,
+        preferSycl,
+        preferVulkan,
+        systemLlamaPath,
+        launchCommand: this.diagnosticsCache?.value.launchCommand ?? null,
+        launchBackend: this.diagnosticsCache?.value.launchBackend ?? null,
+      },
+      expiresAt: Date.now() + 60_000,
     };
+
+    return diagnostics;
   }
 
   private async detectVulkanSupport(platform: NodeJS.Platform): Promise<boolean> {
@@ -394,7 +572,7 @@ class SidecarRuntimeService {
     }
 
     if (platform === "win32") {
-      return existsSync("C:\\Windows\\System32\\vulkan-1.dll");
+      return false;
     }
 
     if (platform === "linux") {
@@ -434,96 +612,217 @@ class SidecarRuntimeService {
     return assets.find((asset) => pattern.test(asset.name)) ?? null;
   }
 
-  private async selectBestAsset(assets: GitHubReleaseAsset[]): Promise<RuntimeMatch | null> {
-    const capabilities = await this.detectCapabilities();
-    const candidates: Array<() => RuntimeMatch | null> = [];
+  private parseGpuVendors(output: string): GpuVendor[] {
+    const vendors = new Set<GpuVendor>();
+    const normalized = output.toLowerCase();
+    if (normalized.includes("nvidia")) vendors.add("nvidia");
+    if (normalized.includes("amd") || normalized.includes("radeon")) vendors.add("amd");
+    if (normalized.includes("intel")) vendors.add("intel");
+    return [...vendors];
+  }
 
-    if (capabilities.platform === "android" && capabilities.arch === "arm64") {
-      candidates.push(() => {
-        const asset = this.findFirstAsset(assets, /^llama-.*-bin-android-arm64\.tar\.gz$/i);
-        return asset ? { variant: "android-arm64-cpu", asset } : null;
-      });
-    } else if (capabilities.platform === "darwin" && capabilities.arch === "arm64") {
-      candidates.push(() => {
-        const asset =
-          this.findFirstAsset(assets, /^llama-.*-bin-macos-arm64\.tar\.gz$/i) ??
-          this.findFirstAsset(assets, /^llama-.*-bin-macos-arm64-kleidiai\.tar\.gz$/i);
-        return asset ? { variant: "macos-arm64-metal", asset } : null;
-      });
-    } else if (capabilities.platform === "darwin" && capabilities.arch === "x64") {
-      candidates.push(() => {
-        const asset = this.findFirstAsset(assets, /^llama-.*-bin-macos-x64\.tar\.gz$/i);
-        return asset ? { variant: "macos-x64-cpu", asset } : null;
-      });
-    } else if (capabilities.platform === "win32" && capabilities.arch === "x64") {
-      if (capabilities.preferCuda) {
-        candidates.push(() => {
-          const asset =
-            this.pickLatestVersionedAsset(assets, /^(?:cudart-)?llama-.*-bin-win-cuda-[0-9.]+-x64\.zip$/i, {
-              preferPrefix: "cudart-",
-            }) ?? null;
-          return asset ? { variant: "win-x64-cuda", asset } : null;
-        });
-      }
-      if (capabilities.preferVulkan) {
-        candidates.push(() => {
-          const asset = this.findFirstAsset(assets, /^llama-.*-bin-win-vulkan-x64\.zip$/i);
-          return asset ? { variant: "win-x64-vulkan", asset } : null;
-        });
-      }
-      candidates.push(() => {
-        const asset = this.findFirstAsset(assets, /^llama-.*-bin-win-cpu-x64\.zip$/i);
-        return asset ? { variant: "win-x64-cpu", asset } : null;
-      });
-    } else if (capabilities.platform === "win32" && capabilities.arch === "arm64") {
-      candidates.push(() => {
-        const asset = this.findFirstAsset(assets, /^llama-.*-bin-win-cpu-arm64\.zip$/i);
-        return asset ? { variant: "win-arm64-cpu", asset } : null;
-      });
-    } else if (capabilities.platform === "linux" && capabilities.arch === "x64") {
-      if (capabilities.preferCuda) {
-        candidates.push(() => {
-          const asset = this.pickLatestVersionedAsset(assets, /^llama-.*-bin-ubuntu-cuda-[0-9.]+-x64\.tar\.gz$/i);
-          return asset ? { variant: "linux-x64-cuda", asset } : null;
-        });
-      }
-      if (capabilities.preferRocm) {
-        candidates.push(() => {
-          const asset = this.pickLatestVersionedAsset(assets, /^llama-.*-bin-ubuntu-rocm-[0-9.]+-x64\.tar\.gz$/i);
-          return asset ? { variant: "linux-x64-rocm", asset } : null;
-        });
-      }
-      if (capabilities.preferVulkan) {
-        candidates.push(() => {
-          const asset = this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-vulkan-x64\.tar\.gz$/i);
-          return asset ? { variant: "linux-x64-vulkan", asset } : null;
-        });
-      }
-      candidates.push(() => {
-        const asset = this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-x64\.tar\.gz$/i);
-        return asset ? { variant: "linux-x64-cpu", asset } : null;
-      });
-    } else if (capabilities.platform === "linux" && capabilities.arch === "arm64") {
-      if (capabilities.preferVulkan) {
-        candidates.push(() => {
-          const asset = this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-vulkan-arm64\.tar\.gz$/i);
-          return asset ? { variant: "linux-arm64-vulkan", asset } : null;
-        });
-      }
-      candidates.push(() => {
-        const asset = this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-arm64\.tar\.gz$/i);
-        return asset ? { variant: "linux-arm64-cpu", asset } : null;
-      });
+  private async detectWindowsGpuVendors(): Promise<GpuVendor[]> {
+    try {
+      const { stdout } = await execFileAsync(
+        "powershell",
+        ["-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
+        { timeout: 5_000 },
+      );
+      return this.parseGpuVendors(stdout);
+    } catch {
+      return [];
     }
+  }
 
-    for (const pick of candidates) {
-      const match = pick();
-      if (match) {
-        return match;
+  private async detectLinuxGpuVendors(): Promise<GpuVendor[]> {
+    try {
+      const { stdout } = await execFileAsync("sh", ["-lc", "lspci -nn"], { timeout: 5_000 });
+      return this.parseGpuVendors(stdout);
+    } catch {
+      return [];
+    }
+  }
+
+  private async detectSystemLlamaPath(): Promise<string | null> {
+    const candidates: Array<[string, string]> =
+      process.platform === "win32"
+        ? [
+            ["where", "llama-server.exe"],
+            ["where", "llama-server"],
+          ]
+        : [
+            ["which", "llama-server"],
+          ];
+
+    for (const [command, target] of candidates) {
+      try {
+        const { stdout } = await execFileAsync(command, [target], { timeout: 5_000 });
+        const first = stdout
+          .split(/\r?\n/u)
+          .map((line) => line.trim())
+          .find(Boolean);
+        if (first) {
+          return first;
+        }
+      } catch {
+        // Try the next command.
       }
     }
 
     return null;
+  }
+
+  private shouldUseSystemRuntime(): boolean {
+    return parseBooleanEnv(process.env.MARINARA_SIDECAR_USE_SYSTEM_LLAMA) ||
+      parseBooleanEnv(process.env.MARINARA_SIDECAR_USE_SYSTEM_LLAMA_SERVER);
+  }
+
+  private createSystemInstall(systemPath: string, capabilities: RuntimeCapabilities | null): SidecarRuntimeInstall {
+    const gpuCapable = capabilities
+      ? capabilities.preferCuda || capabilities.preferHip || capabilities.preferRocm || capabilities.preferSycl || capabilities.preferVulkan
+      : false;
+
+    return {
+      build: `system: ${basename(systemPath)}`,
+      variant: "system-llama-server",
+      platform: process.platform,
+      arch: process.arch,
+      assetName: "system",
+      directoryName: "",
+      serverRelativePath: basename(systemPath),
+      installedAt: new Date(0).toISOString(),
+      directoryPath: dirname(systemPath),
+      serverPath: systemPath,
+      source: "system",
+      systemPath,
+      gpuCapable,
+    };
+  }
+
+  private getSystemInstallSync(diagnostics: SidecarRuntimeDiagnostics): SidecarRuntimeInstall | null {
+    if (!this.shouldUseSystemRuntime()) {
+      return null;
+    }
+
+    const systemPath = diagnostics.systemLlamaPath;
+    if (!systemPath) {
+      this.refreshDiagnosticsInBackground();
+      return null;
+    }
+
+    const capabilities: RuntimeCapabilities | null =
+      this.diagnosticsCache?.value
+        ? {
+            platform: process.platform,
+            arch: process.arch,
+            gpuVendors: diagnostics.gpuVendors.filter((vendor): vendor is GpuVendor => vendor === "nvidia" || vendor === "amd" || vendor === "intel"),
+            preferCuda: diagnostics.preferCuda,
+            preferHip: diagnostics.preferHip,
+            preferRocm: diagnostics.preferRocm,
+            preferSycl: diagnostics.preferSycl,
+            preferVulkan: diagnostics.preferVulkan,
+            systemLlamaPath: diagnostics.systemLlamaPath,
+          }
+        : null;
+    return this.createSystemInstall(systemPath, capabilities);
+  }
+
+  private async getSystemInstall(): Promise<SidecarRuntimeInstall | null> {
+    if (!this.shouldUseSystemRuntime()) {
+      return null;
+    }
+
+    const capabilities = await this.detectCapabilities();
+    if (!capabilities.systemLlamaPath) {
+      return null;
+    }
+
+    return this.createSystemInstall(capabilities.systemLlamaPath, capabilities);
+  }
+
+  private pushCandidate(
+    matches: RuntimeMatch[],
+    excludedVariants: Set<string>,
+    variant: string,
+    asset: GitHubReleaseAsset | null,
+  ): void {
+    if (!asset || excludedVariants.has(variant) || matches.some((match) => match.variant === variant)) {
+      return;
+    }
+    matches.push({ variant, asset });
+  }
+
+  private async selectBestAsset(
+    assets: GitHubReleaseAsset[],
+    excludedVariants: Set<string> = new Set(),
+  ): Promise<RuntimeMatch | null> {
+    const capabilities = await this.detectCapabilities();
+    const matches: RuntimeMatch[] = [];
+
+    if (capabilities.platform === "android" && capabilities.arch === "arm64") {
+      this.pushCandidate(matches, excludedVariants, "android-arm64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-android-arm64\.tar\.gz$/i));
+    } else if (capabilities.platform === "darwin" && capabilities.arch === "arm64") {
+      this.pushCandidate(
+        matches,
+        excludedVariants,
+        "macos-arm64-metal",
+        this.findFirstAsset(assets, /^llama-.*-bin-macos-arm64\.tar\.gz$/i) ??
+          this.findFirstAsset(assets, /^llama-.*-bin-macos-arm64-kleidiai\.tar\.gz$/i),
+      );
+    } else if (capabilities.platform === "darwin" && capabilities.arch === "x64") {
+      this.pushCandidate(matches, excludedVariants, "macos-x64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-macos-x64\.tar\.gz$/i));
+    } else if (capabilities.platform === "win32" && capabilities.arch === "x64") {
+      if (capabilities.preferCuda) {
+        this.pushCandidate(
+          matches,
+          excludedVariants,
+          "win-x64-cuda",
+          this.pickLatestVersionedAsset(assets, /^(?:cudart-)?llama-.*-bin-win-cuda-[0-9.]+-x64\.zip$/i, {
+            preferPrefix: "cudart-",
+          }) ?? null,
+        );
+      }
+      if (capabilities.preferHip) {
+        this.pushCandidate(matches, excludedVariants, "win-x64-hip", this.findFirstAsset(assets, /^llama-.*-bin-win-hip-x64\.zip$/i));
+      }
+      if (capabilities.preferSycl) {
+        this.pushCandidate(matches, excludedVariants, "win-x64-sycl", this.findFirstAsset(assets, /^llama-.*-bin-win-sycl-x64\.zip$/i));
+      }
+      if (capabilities.preferVulkan) {
+        this.pushCandidate(matches, excludedVariants, "win-x64-vulkan", this.findFirstAsset(assets, /^llama-.*-bin-win-vulkan-x64\.zip$/i));
+      }
+      this.pushCandidate(matches, excludedVariants, "win-x64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-win-cpu-x64\.zip$/i));
+    } else if (capabilities.platform === "win32" && capabilities.arch === "arm64") {
+      this.pushCandidate(matches, excludedVariants, "win-arm64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-win-cpu-arm64\.zip$/i));
+    } else if (capabilities.platform === "linux" && capabilities.arch === "x64") {
+      if (capabilities.preferCuda) {
+        this.pushCandidate(
+          matches,
+          excludedVariants,
+          "linux-x64-cuda",
+          this.pickLatestVersionedAsset(assets, /^llama-.*-bin-ubuntu-cuda-[0-9.]+-x64\.tar\.gz$/i),
+        );
+      }
+      if (capabilities.preferRocm) {
+        this.pushCandidate(
+          matches,
+          excludedVariants,
+          "linux-x64-rocm",
+          this.pickLatestVersionedAsset(assets, /^llama-.*-bin-ubuntu-rocm-[0-9.]+-x64\.tar\.gz$/i),
+        );
+      }
+      if (capabilities.preferVulkan) {
+        this.pushCandidate(matches, excludedVariants, "linux-x64-vulkan", this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-vulkan-x64\.tar\.gz$/i));
+      }
+      this.pushCandidate(matches, excludedVariants, "linux-x64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-x64\.tar\.gz$/i));
+    } else if (capabilities.platform === "linux" && capabilities.arch === "arm64") {
+      if (capabilities.preferVulkan) {
+        this.pushCandidate(matches, excludedVariants, "linux-arm64-vulkan", this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-vulkan-arm64\.tar\.gz$/i));
+      }
+      this.pushCandidate(matches, excludedVariants, "linux-arm64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-arm64\.tar\.gz$/i));
+    }
+
+    return matches[0] ?? null;
   }
 }
 
