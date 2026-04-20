@@ -61,9 +61,22 @@ export function PresetsPanel() {
     updateChat.mutate(
       { id: activeChat.id, promptPresetId: newId },
       {
-        onSuccess: () => {
-          // If assigning (not unassigning), check for choice blocks
-          if (newId) setChoiceModalPresetId(newId);
+        onSuccess: async () => {
+          if (!newId) {
+            setChoiceModalPresetId(null);
+            return;
+          }
+
+          try {
+            const presetFull = await api.get<{ choiceBlocks?: unknown[] }>(`/prompts/${newId}/full`);
+            if ((presetFull.choiceBlocks?.length ?? 0) > 0) {
+              setChoiceModalPresetId(newId);
+            } else {
+              setChoiceModalPresetId(null);
+            }
+          } catch {
+            setChoiceModalPresetId(null);
+          }
         },
       },
     );
@@ -359,7 +372,7 @@ export function PresetsPanel() {
         <ChoiceSelectionModal
           open={!!choiceModalPresetId}
           onClose={() => setChoiceModalPresetId(null)}
-          presetId={activePresetId ?? choiceModalPresetId}
+          presetId={choiceModalPresetId}
           chatId={activeChat.id}
           existingChoices={
             typeof activeChat.metadata === "string"

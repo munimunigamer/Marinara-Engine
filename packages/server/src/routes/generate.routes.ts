@@ -1785,10 +1785,12 @@ export async function generateRoutes(app: FastifyInstance) {
         verbosity = null;
       } else if (chatMode === "game") {
         // Local Gemma: just ensure generous output
-        maxTokens = Math.max(maxTokens, 8192);
+        if (typeof chatParams?.maxTokens !== "number") {
+          maxTokens = Math.max(maxTokens, 8192);
+        }
       }
 
-      if (chatParams && chatMode !== "game") {
+      if (chatParams) {
         if (typeof chatParams.temperature === "number") temperature = chatParams.temperature;
         if (typeof chatParams.maxTokens === "number") maxTokens = chatParams.maxTokens;
         topP = normalizeChatTopP(chatParams.topP) ?? topP;
@@ -2004,6 +2006,47 @@ export async function generateRoutes(app: FastifyInstance) {
           });
         }
       }
+
+      let resolvedGameDiscordSpeakerName: string | null = null;
+      let gameDiscordSpeakerResolved = false;
+
+      const resolveGameDiscordSpeakerName = async (): Promise<string> => {
+        if (gameDiscordSpeakerResolved) {
+          return resolvedGameDiscordSpeakerName ?? "Narrator";
+        }
+
+        gameDiscordSpeakerResolved = true;
+        const gmMode = typeof earlyMeta.gameGmMode === "string" ? earlyMeta.gameGmMode : "";
+        const gmCharacterId =
+          typeof earlyMeta.gameGmCharacterId === "string" && earlyMeta.gameGmCharacterId.trim()
+            ? earlyMeta.gameGmCharacterId.trim()
+            : null;
+
+        if (chatMode === "game" && gmMode === "character" && gmCharacterId) {
+          const knownCharacter = charInfo.find((character) => character.id === gmCharacterId);
+          if (knownCharacter?.name) {
+            resolvedGameDiscordSpeakerName = knownCharacter.name;
+            return knownCharacter.name;
+          }
+
+          const gmRow = await chars.getById(gmCharacterId);
+          if (gmRow) {
+            try {
+              const gmData = JSON.parse(gmRow.data as string);
+              if (typeof gmData.name === "string" && gmData.name.trim()) {
+                const gmName = gmData.name.trim();
+                resolvedGameDiscordSpeakerName = gmName;
+                return gmName;
+              }
+            } catch {
+              /* ignore malformed GM card data */
+            }
+          }
+        }
+
+        resolvedGameDiscordSpeakerName = "Narrator";
+        return "Narrator";
+      };
 
       // ── Fallback: inject character & persona info if the preset didn't include them ──
       // In game mode the GM prompt already includes party members and player persona
@@ -4514,7 +4557,10 @@ export async function generateRoutes(app: FastifyInstance) {
 
           // Mirror character response to Discord (fire-and-forget, skip regens/swipes)
           if (discordWebhookUrl && fullResponse.trim() && !input.impersonate && !input.regenerateMessageId) {
-            const charName = charInfo.find((c) => c.id === targetCharId)?.name ?? "Character";
+            const charName =
+              chatMode === "game"
+                ? await resolveGameDiscordSpeakerName()
+                : (charInfo.find((c) => c.id === targetCharId)?.name ?? "Character");
             postToDiscordWebhook(discordWebhookUrl, { content: fullResponse, username: charName });
           }
 

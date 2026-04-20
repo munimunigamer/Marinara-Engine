@@ -877,9 +877,33 @@ export const ChatMessage = memo(function ChatMessage({
   // ─── System messages (shared across modes) ───
   if (isSystem) {
     return (
-      <div className="mari-system-message flex justify-center py-2">
-        <div className="mari-system-message-content rounded-full bg-[var(--secondary)] px-4 py-1.5 text-[0.6875rem] text-[var(--muted-foreground)]">
-          {message.content}
+      <div
+        ref={msgRef}
+        className={cn(
+          "mari-system-message group flex justify-center py-2",
+          multiSelectMode && isSelected && "rounded-lg bg-[var(--destructive)]/5 ring-2 ring-[var(--destructive)]/50",
+        )}
+        onClick={handleMobileTap}
+      >
+        <div className="relative">
+          {!multiSelectMode && onDelete && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(message.id);
+              }}
+              className={cn(
+                "absolute -right-1 -top-1 rounded-md p-1 text-white/20 opacity-0 transition-all hover:bg-red-500/20 hover:text-red-400 group-hover:opacity-100",
+                showActions && "opacity-100",
+              )}
+              title="Delete"
+            >
+              <Trash2 size="0.75rem" />
+            </button>
+          )}
+          <div className="mari-system-message-content rounded-full bg-[var(--secondary)] px-4 py-1.5 text-[0.6875rem] text-[var(--muted-foreground)]">
+            {message.content}
+          </div>
         </div>
       </div>
     );

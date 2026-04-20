@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import DOMPurify from "dompurify";
-import { MessageCircle, RefreshCw, ScrollText, X, Package, Pencil, Check, Play, Pause } from "lucide-react";
+import { MessageCircle, RefreshCw, ScrollText, X, Package, Pencil, Check, Play, Pause, Trash2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { stripGmTagsKeepReadables } from "../../lib/game-tag-parser";
 import { audioManager } from "../../lib/game-audio";
@@ -46,7 +46,7 @@ interface NarrationMessage {
 
 interface NarrationSegment {
   id: string;
-  type: "narration" | "dialogue" | "readable";
+  type: "narration" | "dialogue" | "readable" | "system";
   speaker?: string;
   sprite?: string;
   content: string;
@@ -113,6 +113,8 @@ interface GameNarrationProps {
   onOpenInventory?: () => void;
   /** Number of items in inventory (for badge) */
   inventoryCount?: number;
+  /** Open the standard delete-message flow for a backing chat message. */
+  onDeleteMessage?: (messageId: string) => void;
   /** Called when user edits a narration segment. Receives message id and new content. */
   onEditSegment?: (messageId: string, segmentIndex: number, newContent: string) => void;
   /** Map of "messageId:segmentIndex" → edited content for segment overlay edits */
@@ -209,6 +211,7 @@ export function GameNarration({
   choicesSlot,
   onOpenInventory,
   inventoryCount,
+  onDeleteMessage,
   onEditSegment,
   segmentEdits,
   assetsGenerating,
@@ -597,6 +600,20 @@ export function GameNarration({
         continue;
       }
 
+      if (msg.role === "system" && msg.content.trim()) {
+        entries.push({
+          messageId: msg.id,
+          segments: [
+            {
+              id: `${msg.id}-system-log`,
+              type: "system",
+              content: msg.content,
+            },
+          ],
+        });
+        continue;
+      }
+
       if (msg.role !== "assistant" && msg.role !== "narrator") continue;
 
       if (latestAssistant && msg.id === latestAssistant.id) {
@@ -751,6 +768,21 @@ export function GameNarration({
   const lastNarrationMsgIdRef = useRef<string | undefined>(undefined);
   const segmentChangeReady = useRef(false);
   const segmentEnterReady = useRef(false);
+  const gameInstantTextReveal = useUIStore((s) => s.gameInstantTextReveal);
+  const gameTextSpeed = useUIStore((s) => s.gameTextSpeed);
+  const gameAutoPlayDelay = useUIStore((s) => s.gameAutoPlayDelay);
+  const chatFontColor = useUIStore((s) => s.chatFontColor);
+  const narrationStyle = chatFontColor ? { color: chatFontColor } : undefined;
+  const [autoPlay, setAutoPlay] = useState(false);
+
+  const getSegmentStartVisibleChars = useCallback(
+    (index: number) => {
+      const segment = segments[index];
+      if (!segment || !gameInstantTextReveal || directionsActive) return 0;
+      return effectDisplayLength(segment.content);
+    },
+    [segments, gameInstantTextReveal, directionsActive],
+  );
 
   useEffect(() => {
     // Only react to message ID changes (not content changes during streaming).
@@ -782,11 +814,19 @@ export function GameNarration({
       return;
     }
     setActiveIndex(playerSegmentOffset);
-    setVisibleChars(0);
+    setVisibleChars(getSegmentStartVisibleChars(playerSegmentOffset));
     // For non-restore (new message), enable persistence and enter immediately
     segmentChangeReady.current = true;
     segmentEnterReady.current = true;
-  }, [latestAssistant?.id, isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    latestAssistant?.id,
+    isStreaming,
+    isRestored,
+    restoredSegmentIndex,
+    segments,
+    playerSegmentOffset,
+    getSegmentStartVisibleChars,
+  ]);
 
   // When segments grow after restore (e.g. party dialogue restored asynchronously),
   // jump to the exact saved segment index if it's now in bounds.
@@ -827,12 +867,6 @@ export function GameNarration({
     onReadable({ type: active.readableType ?? "note", content: active.readableContent });
   }, [activeIndex, active, visibleChars, onReadable]);
 
-  const gameTextSpeed = useUIStore((s) => s.gameTextSpeed);
-  const gameAutoPlayDelay = useUIStore((s) => s.gameAutoPlayDelay);
-  const chatFontColor = useUIStore((s) => s.chatFontColor);
-  const narrationStyle = chatFontColor ? { color: chatFontColor } : undefined;
-  const [autoPlay, setAutoPlay] = useState(false);
-
   useEffect(() => {
     if (!active) return;
     // Pause typewriter while direction effects (fades, flashes, etc.) are playing
@@ -844,7 +878,7 @@ export function GameNarration({
     tw.pos = visibleChars;
 
     if (tw.pos >= dispLen) return;
-    if (gameTextSpeed >= 100) {
+    if (gameInstantTextReveal || gameTextSpeed >= 100) {
       // Instant
       tw.pos = dispLen;
       setVisibleChars(dispLen);
@@ -866,7 +900,7 @@ export function GameNarration({
     }, TICK_MS);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, gameTextSpeed, directionsActive]); // visibleChars intentionally excluded — managed internally
+  }, [active, gameInstantTextReveal, gameTextSpeed, directionsActive]); // visibleChars intentionally excluded — managed internally
 
   const assetManifest = useGameAssetStore((s) => s.manifest);
 
@@ -883,8 +917,9 @@ export function GameNarration({
       return;
     }
     if (activeIndex < segments.length - 1) {
-      setActiveIndex((i) => i + 1);
-      setVisibleChars(0);
+      const nextIndex = activeIndex + 1;
+      setActiveIndex(nextIndex);
+      setVisibleChars(getSegmentStartVisibleChars(nextIndex));
       playClickSfx();
     }
   };
@@ -897,8 +932,9 @@ export function GameNarration({
     if (editingContent !== null) return;
     if (activeIndex >= segments.length - 1) return; // reached input; stop
     const id = window.setTimeout(() => {
-      setActiveIndex((i) => (i < segments.length - 1 ? i + 1 : i));
-      setVisibleChars(0);
+      const nextIndex = Math.min(activeIndex + 1, segments.length - 1);
+      setActiveIndex(nextIndex);
+      setVisibleChars(getSegmentStartVisibleChars(nextIndex));
       playClickSfx();
     }, gameAutoPlayDelay);
     return () => window.clearTimeout(id);
@@ -914,6 +950,7 @@ export function GameNarration({
     scenePreparing,
     directionsActive,
     editingContent,
+    getSegmentStartVisibleChars,
     playClickSfx,
   ]);
 
@@ -1583,6 +1620,36 @@ export function GameNarration({
                                 />
                               )}
                             </div>
+                          </div>
+                        );
+                      }
+                      if (seg.type === "system") {
+                        return (
+                          <div
+                            key={seg.id}
+                            className={cn(
+                              "group/logseg relative rounded-lg border border-cyan-400/15 bg-cyan-950/15 px-3 py-2",
+                              isActiveSeg && "ring-1 ring-[var(--primary)]/40",
+                            )}
+                          >
+                            {onDeleteMessage && (
+                              <button
+                                onClick={() => onDeleteMessage(entry.messageId)}
+                                className="absolute right-1.5 top-1.5 rounded p-1 text-white/20 opacity-0 transition-all group-hover/logseg:opacity-100 hover:bg-red-500/20 hover:text-red-400"
+                                title="Delete"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            )}
+                            <div className="mb-1 flex items-center">
+                              <span className="text-[0.6rem] font-semibold uppercase tracking-wide text-cyan-200/80">
+                                System
+                              </span>
+                            </div>
+                            <div
+                              className="whitespace-pre-wrap break-words pr-6 text-xs leading-relaxed text-cyan-50/80"
+                              dangerouslySetInnerHTML={{ __html: animateTextHtml(formatNarration(seg.content, false)) }}
+                            />
                           </div>
                         );
                       }

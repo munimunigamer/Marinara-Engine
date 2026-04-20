@@ -10,8 +10,12 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Conversation mode swipe controls.
 - An option to delete a selected swipe instead of the entire message.
 - Prompt caching support and cache hit/write visibility for OpenRouter Claude connections.
-- Recommended models for the first game generation.
+- Recommended models for the first Game generation.
 - A setting to disable bold dialogue formatting while keeping dialogue colors.
+- Custom parameters setup for initial Game mode generation.
+- Instant display of messages in game mode.
+- Discord Mirror for all chatting modes.
+- No more "Preset Variables" pop-up on presets without them.
 
 ### Fixed
 
@@ -27,7 +31,13 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Character schedules now use your local timezone when generating.
 - Dialogue highlight colors now keep working even when bold dialogue is turned off.
 - Marinara landing-screen effects now stop rendering when they are off-screen, and they stay paused while the tab is inactive.
-- Visual effects are paused when the tab with Marinara Engine is not focused, improving GPU usage.
+- Text renders in HD.
+- We correctly catch Gemma-4's thinking tag.
+- Audio docker fix.
+- Selecting a new location in the Game mode now doesn't automatically transport you there.
+- Party-only Game turns no longer commit staged travel.
+- Game Discord Mirror now carries narrator labels across regular turns and new-session recaps.
+- Game chat parameter changes now override setup-time defaults after the game has already been created.
 
 ## [1.5.2]
 

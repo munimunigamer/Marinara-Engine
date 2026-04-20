@@ -171,6 +171,8 @@ function GeneralSettings() {
   const setEnableStreaming = useUIStore((s) => s.setEnableStreaming);
   const streamingSpeed = useUIStore((s) => s.streamingSpeed);
   const setStreamingSpeed = useUIStore((s) => s.setStreamingSpeed);
+  const gameInstantTextReveal = useUIStore((s) => s.gameInstantTextReveal);
+  const setGameInstantTextReveal = useUIStore((s) => s.setGameInstantTextReveal);
   const gameTextSpeed = useUIStore((s) => s.gameTextSpeed);
   const setGameTextSpeed = useUIStore((s) => s.setGameTextSpeed);
   const gameAutoPlayDelay = useUIStore((s) => s.gameAutoPlayDelay);
@@ -248,27 +250,36 @@ function GeneralSettings() {
         </div>
       </label>
 
+      <ToggleSetting
+        label="Instantly reveal game text"
+        checked={gameInstantTextReveal}
+        onChange={setGameInstantTextReveal}
+        help="When enabled, Game mode narration segments appear fully as soon as you enter them. This skips the typewriter effect and hides the narration speed control."
+      />
+
       {/* Game Narration Text Speed */}
-      <label className="flex flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50">
-        <div className="flex items-center gap-2">
-          <span className="text-xs">Game narration speed</span>
-          <span className="text-xs tabular-nums text-[var(--muted-foreground)]">{gameTextSpeed}</span>
-          <HelpTooltip text="How fast the typewriter effect displays narration text in Game mode. Lower values give a slower cinematic reveal. Higher values show text almost instantly." />
-        </div>
-        <input
-          type="range"
-          min={1}
-          max={100}
-          step={1}
-          value={gameTextSpeed}
-          onChange={(e) => setGameTextSpeed(Number(e.target.value))}
-          className="w-full accent-[var(--primary)]"
-        />
-        <div className="flex justify-between text-[0.625rem] text-[var(--muted-foreground)]">
-          <span>Slow</span>
-          <span>Fast</span>
-        </div>
-      </label>
+      {!gameInstantTextReveal && (
+        <label className="flex flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50">
+          <div className="flex items-center gap-2">
+            <span className="text-xs">Game narration speed</span>
+            <span className="text-xs tabular-nums text-[var(--muted-foreground)]">{gameTextSpeed}</span>
+            <HelpTooltip text="How fast the typewriter effect displays narration text in Game mode. Lower values give a slower cinematic reveal. Higher values show text almost instantly." />
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={100}
+            step={1}
+            value={gameTextSpeed}
+            onChange={(e) => setGameTextSpeed(Number(e.target.value))}
+            className="w-full accent-[var(--primary)]"
+          />
+          <div className="flex justify-between text-[0.625rem] text-[var(--muted-foreground)]">
+            <span>Slow</span>
+            <span>Fast</span>
+          </div>
+        </label>
+      )}
 
       {/* Game Auto-Play Delay */}
       <label className="flex flex-col gap-1.5 rounded-lg p-1 transition-colors hover:bg-[var(--secondary)]/50">

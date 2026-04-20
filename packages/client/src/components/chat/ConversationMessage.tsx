@@ -459,10 +459,44 @@ export const ConversationMessage = memo(function ConversationMessage({
   // System messages — minimal display
   if (isSystem) {
     return (
-      <div className="flex justify-center py-1">
-        <span className="rounded-full bg-[var(--secondary)] px-3 py-1 text-[0.6875rem] text-[var(--muted-foreground)]">
-          {message.content}
-        </span>
+      <div
+        className={cn(
+          "group flex justify-center py-1",
+          multiSelectMode && isSelected && "rounded-lg bg-[var(--destructive)]/10",
+        )}
+        onClick={(e) => {
+          if (multiSelectMode) {
+            onToggleSelect?.({
+              messageId: message.id,
+              orderIndex: messageOrderIndex ?? 0,
+              checked: !isSelected,
+              shiftKey: e.shiftKey,
+            });
+          } else {
+            setShowActions((v) => !v);
+          }
+        }}
+      >
+        <div className="relative">
+          {!multiSelectMode && onDelete && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(message.id);
+              }}
+              className={cn(
+                "absolute -right-1 -top-1 rounded-md p-1 text-white/20 opacity-0 transition-all hover:bg-red-500/20 hover:text-red-400 group-hover:opacity-100",
+                showActions && "opacity-100",
+              )}
+              title="Delete"
+            >
+              <Trash2 size="0.75rem" />
+            </button>
+          )}
+          <span className="rounded-full bg-[var(--secondary)] px-3 py-1 text-[0.6875rem] text-[var(--muted-foreground)]">
+            {message.content}
+          </span>
+        </div>
       </div>
     );
   }

@@ -866,7 +866,12 @@ export function ChatArea() {
               </p>
             </div>
 
-            <div className={cn("flex flex-wrap justify-center gap-2 sm:gap-3", showEmptyStateEffects && "stagger-children")}>
+            <div
+              className={cn(
+                "flex flex-wrap justify-center gap-2 sm:gap-3",
+                showEmptyStateEffects && "stagger-children",
+              )}
+            >
               <QuickStartCard
                 icon={<MessageSquare size="1.125rem" />}
                 label="Conversation"
@@ -896,7 +901,12 @@ export function ChatArea() {
             {/* Recent Chats */}
             <RecentChats />
 
-            <div className={cn("w-48", showEmptyStateEffects ? "retro-divider" : "h-px rounded-[1px] bg-[var(--border)]/40")} />
+            <div
+              className={cn(
+                "w-48",
+                showEmptyStateEffects ? "retro-divider" : "h-px rounded-[1px] bg-[var(--border)]/40",
+              )}
+            />
 
             {/* Footer */}
             <div className="mt-2 flex flex-col items-center gap-3">
@@ -1067,6 +1077,7 @@ export function ChatArea() {
             personaInfo={personaInfo}
             chatBackground={chatBackground}
             onOpenSettings={() => setSettingsOpen(true)}
+            onDeleteMessage={handleDelete}
           />
 
           <ChatCommonOverlays

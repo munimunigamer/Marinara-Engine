@@ -48,10 +48,17 @@ import { cn } from "../../lib/utils";
 import { showAlertDialog, showConfirmDialog, showPromptDialog } from "../../lib/app-dialogs";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { ExpandedTextarea } from "../ui/ExpandedTextarea";
+import {
+  CHAT_PARAMETER_DEFAULTS,
+  GenerationParametersFields,
+  getEditableGenerationParameters,
+  type EditableGenerationParameters,
+  ROLEPLAY_PARAMETER_DEFAULTS,
+} from "../ui/GenerationParametersEditor";
 import { ChoiceSelectionModal } from "../presets/ChoiceSelectionModal";
 import { useCharacters, useCharacterSprites, usePersonas, useCharacterGroups } from "../../hooks/use-characters";
 import { useLorebooks } from "../../hooks/use-lorebooks";
-import { usePresets } from "../../hooks/use-presets";
+import { usePresetFull, usePresets } from "../../hooks/use-presets";
 import { useConnections, useSaveConnectionDefaults } from "../../hooks/use-connections";
 import {
   useUpdateChat,
@@ -119,6 +126,7 @@ export function ChatSettingsDrawer({
   const { data: characterGroups } = useCharacterGroups();
   const { data: lorebooks } = useLorebooks();
   const { data: presets } = usePresets();
+  const { data: currentPromptPresetFull } = usePresetFull(chat.promptPresetId ?? null);
   const { data: connections } = useConnections();
   const imageConnectionsList = useMemo(
     () =>
@@ -393,12 +401,28 @@ export function ChatSettingsDrawer({
     updateMeta.mutate({ id: chat.id, activeToolIds: current });
   };
 
+  const currentPromptPresetHasVariables = (currentPromptPresetFull?.choiceBlocks?.length ?? 0) > 0;
+
   const setPreset = (presetId: string | null) => {
     updateChat.mutate(
       { id: chat.id, promptPresetId: presetId },
       {
-        onSuccess: () => {
-          if (presetId) setChoiceModalPresetId(presetId);
+        onSuccess: async () => {
+          if (!presetId) {
+            setChoiceModalPresetId(null);
+            return;
+          }
+
+          try {
+            const presetFull = await api.get<{ choiceBlocks?: unknown[] }>(`/prompts/${presetId}/full`);
+            if ((presetFull.choiceBlocks?.length ?? 0) > 0) {
+              setChoiceModalPresetId(presetId);
+            } else {
+              setChoiceModalPresetId(null);
+            }
+          } catch {
+            setChoiceModalPresetId(null);
+          }
         },
       },
     );
@@ -831,7 +855,7 @@ export function ChatSettingsDrawer({
                     </option>
                   ))}
                 </select>
-                {chat.promptPresetId && (
+                {chat.promptPresetId && currentPromptPresetHasVariables && (
                   <button
                     onClick={() => setChoiceModalPresetId(chat.promptPresetId!)}
                     className="shrink-0 rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
@@ -2597,17 +2621,17 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          {/* Discord Webhook — conversation mode only */}
-          {isConversation && (
+          {/* Discord Webhook */}
+          {
             <Section
               label="Discord Mirror"
               icon={<Globe size="0.875rem" />}
-              help="Mirror all messages in this chat to a Discord channel via webhook. Character messages appear under the character's name."
+              help="Mirror messages from this chat to a Discord channel via webhook. Character messages appear under the character's name, and Game mode system narration uses narrator-style labels where needed."
             >
               <div className="space-y-2">
                 <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                  Paste a Discord webhook URL to mirror this chat's messages to a channel. Each character's messages
-                  will appear under their name.
+                  Paste a Discord webhook URL to mirror this chat's messages to a channel. Character messages appear
+                  under their name, and game narration/party messages use simple speaker labels.
                 </p>
                 <input
                   type="url"
@@ -2624,7 +2648,7 @@ export function ChatSettingsDrawer({
                   ) && <p className="text-[0.625rem] text-red-400">Invalid webhook URL format</p>}
               </div>
             </Section>
-          )}
+          }
 
           {/* Function Calling — hidden for conversation mode */}
           {!isConversation && (
@@ -3096,7 +3120,7 @@ export function ChatSettingsDrawer({
       <ChoiceSelectionModal
         open={!!choiceModalPresetId}
         onClose={() => setChoiceModalPresetId(null)}
-        presetId={chat.promptPresetId ?? choiceModalPresetId}
+        presetId={choiceModalPresetId}
         chatId={chat.id}
         existingChoices={metadata.presetChoices ?? {}}
       />
@@ -3147,39 +3171,6 @@ export function ChatSettingsDrawer({
 }
 
 // ── Advanced Parameters (per-chat generation overrides) ──
-interface ChatParameters {
-  temperature?: number;
-  maxTokens?: number;
-  topP?: number;
-  topK?: number;
-  frequencyPenalty?: number;
-  presencePenalty?: number;
-  reasoningEffort?: "low" | "medium" | "high" | "maximum" | null;
-  verbosity?: "low" | "medium" | "high" | null;
-}
-
-const CHAT_PARAM_DEFAULTS: Required<ChatParameters> = {
-  temperature: 1,
-  maxTokens: 4096,
-  topP: 1,
-  topK: 0,
-  frequencyPenalty: 0,
-  presencePenalty: 0,
-  reasoningEffort: "maximum",
-  verbosity: "high",
-};
-
-const ROLEPLAY_PARAM_DEFAULTS: Required<ChatParameters> = {
-  temperature: 1,
-  maxTokens: 8192,
-  topP: 1,
-  topK: 0,
-  frequencyPenalty: 0,
-  presencePenalty: 0,
-  reasoningEffort: "maximum",
-  verbosity: "high",
-};
-
 const DEFAULT_CONVERSATION_PROMPT = `<role>
 You are {{charName}}, a real and autonomous person, chatting with the user called {{userName}} in a casual private DM conversation.
 </role>
@@ -3212,27 +3203,17 @@ function AdvancedParametersSection({
   connectionId: string | null;
   connections: unknown[];
 }) {
-  const modeDefaults = isConversation ? CHAT_PARAM_DEFAULTS : ROLEPLAY_PARAM_DEFAULTS;
+  const modeDefaults = isConversation ? CHAT_PARAMETER_DEFAULTS : ROLEPLAY_PARAMETER_DEFAULTS;
   // Use connection-saved defaults if available, otherwise fall back to mode defaults
   const conn = connectionId ? (connections as Record<string, unknown>[]).find((c) => c.id === connectionId) : null;
-  const connDefaultsRaw = conn?.defaultParameters
-    ? typeof conn.defaultParameters === "string"
-      ? (() => {
-          try {
-            return JSON.parse(conn.defaultParameters as string);
-          } catch {
-            return null;
-          }
-        })()
-      : conn.defaultParameters
-    : null;
-  const defaults: Required<ChatParameters> = connDefaultsRaw ? { ...modeDefaults, ...connDefaultsRaw } : modeDefaults;
+  const defaults = getEditableGenerationParameters(modeDefaults, conn?.defaultParameters);
   const saveDefaults = useSaveConnectionDefaults();
   const [expanded, setExpanded] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
-  const params: ChatParameters = (metadata.chatParameters as ChatParameters) ?? {};
+  const params = (metadata.chatParameters as Record<string, unknown>) ?? {};
   const customPrompt = (metadata.customSystemPrompt as string) ?? "";
+  const effectiveParams = getEditableGenerationParameters(defaults, params);
 
   const openPromptEditor = () => {
     setPromptDraft(customPrompt || DEFAULT_CONVERSATION_PROMPT);
@@ -3247,11 +3228,8 @@ function AdvancedParametersSection({
     setPromptOpen(false);
   };
 
-  const get = <K extends keyof ChatParameters>(key: K): ChatParameters[K] =>
-    key in params && params[key] !== undefined ? params[key] : defaults[key];
-
-  const set = <K extends keyof ChatParameters>(key: K, value: ChatParameters[K]) => {
-    updateMeta.mutate({ id: chat.id, chatParameters: { ...params, [key]: value } });
+  const setParameters = (next: EditableGenerationParameters) => {
+    updateMeta.mutate({ id: chat.id, chatParameters: { ...params, ...next } });
   };
 
   return (
@@ -3277,119 +3255,7 @@ function AdvancedParametersSection({
       </button>
       {expanded && (
         <div className="px-4 pb-3 space-y-3">
-          {/* Generation */}
-          <div className="grid grid-cols-2 gap-2">
-            <ParamInput
-              label="Temperature"
-              help="Controls randomness. Lower values make output more focused and deterministic; higher values make it more creative and varied."
-              value={get("temperature")!}
-              onChange={(v) => set("temperature", v)}
-              min={0}
-              max={2}
-              step={0.05}
-            />
-            <ParamInput
-              label="Max Tokens"
-              help="The maximum number of tokens the model can generate in a single response. Higher values allow longer replies."
-              value={get("maxTokens")!}
-              onChange={(v) => set("maxTokens", v)}
-              min={1}
-              max={32768}
-              step={256}
-            />
-            <ParamInput
-              label="Top P"
-              help="Nucleus sampling: only considers tokens whose cumulative probability reaches this threshold. Lower values make output more focused."
-              value={get("topP")!}
-              onChange={(v) => set("topP", v)}
-              min={0}
-              max={1}
-              step={0.05}
-            />
-            <ParamInput
-              label="Top K"
-              help="Limits the model to only consider the top K most likely tokens at each step. 0 disables this limit."
-              value={get("topK")!}
-              onChange={(v) => set("topK", v)}
-              min={0}
-              max={500}
-              step={1}
-            />
-          </div>
-          {/* Penalties */}
-          <div className="grid grid-cols-2 gap-2">
-            <ParamInput
-              label="Frequency"
-              help="Penalizes tokens based on how often they've already appeared. Positive values reduce repetition; negative values encourage it."
-              value={get("frequencyPenalty")!}
-              onChange={(v) => set("frequencyPenalty", v)}
-              min={-2}
-              max={2}
-              step={0.05}
-            />
-            <ParamInput
-              label="Presence"
-              help="Penalizes tokens that have appeared at all, regardless of frequency. Positive values encourage the model to talk about new topics."
-              value={get("presencePenalty")!}
-              onChange={(v) => set("presencePenalty", v)}
-              min={-2}
-              max={2}
-              step={0.05}
-            />
-          </div>
-          {/* Reasoning */}
-          <div className="space-y-2">
-            <div>
-              <span className="inline-flex items-center gap-1 text-[0.625rem] font-medium text-[var(--muted-foreground)]">
-                Reasoning Effort
-                <HelpTooltip
-                  text="How much the model should 'think' before responding. Higher effort produces more thoughtful, nuanced output but uses more tokens and is slower."
-                  size="0.625rem"
-                />
-              </span>
-              <div className="mt-1 flex gap-1.5">
-                {([null, "low", "medium", "high", "maximum"] as const).map((level) => (
-                  <button
-                    key={level ?? "none"}
-                    onClick={() => set("reasoningEffort", level)}
-                    className={cn(
-                      "rounded-lg px-2 py-1 text-[0.625rem] font-medium transition-all",
-                      get("reasoningEffort") === level
-                        ? "bg-purple-400/15 text-purple-400 ring-1 ring-purple-400/30"
-                        : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
-                    )}
-                  >
-                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "None"}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <span className="inline-flex items-center gap-1 text-[0.625rem] font-medium text-[var(--muted-foreground)]">
-                Verbosity
-                <HelpTooltip
-                  text="Controls how long and detailed responses should be. Low keeps things concise; high encourages elaborate, descriptive output."
-                  size="0.625rem"
-                />
-              </span>
-              <div className="mt-1 flex gap-1.5">
-                {([null, "low", "medium", "high"] as const).map((level) => (
-                  <button
-                    key={level ?? "none"}
-                    onClick={() => set("verbosity", level)}
-                    className={cn(
-                      "rounded-lg px-2 py-1 text-[0.625rem] font-medium transition-all",
-                      get("verbosity") === level
-                        ? "bg-blue-400/15 text-blue-400 ring-1 ring-blue-400/30"
-                        : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
-                    )}
-                  >
-                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "None"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <GenerationParametersFields value={effectiveParams} onChange={setParameters} />
           {/* System Prompt — conversation mode only */}
           {isConversation && (
             <div>
@@ -3424,17 +3290,10 @@ function AdvancedParametersSection({
           {connectionId && connectionId !== "random" && (
             <button
               onClick={() => {
-                const currentParams: ChatParameters = {
-                  temperature: get("temperature"),
-                  maxTokens: get("maxTokens"),
-                  topP: get("topP"),
-                  topK: get("topK"),
-                  frequencyPenalty: get("frequencyPenalty"),
-                  presencePenalty: get("presencePenalty"),
-                  reasoningEffort: get("reasoningEffort"),
-                  verbosity: get("verbosity"),
-                };
-                saveDefaults.mutate({ id: connectionId, params: currentParams as unknown as Record<string, unknown> });
+                saveDefaults.mutate({
+                  id: connectionId,
+                  params: effectiveParams as unknown as Record<string, unknown>,
+                });
               }}
               className="w-full rounded-lg bg-[var(--primary)]/10 px-3 py-1.5 text-[0.625rem] font-medium text-[var(--primary)] ring-1 ring-[var(--primary)]/20 transition-colors hover:bg-[var(--primary)]/20"
             >
@@ -3461,69 +3320,6 @@ function AdvancedParametersSection({
         value={promptDraft}
         onChange={setPromptDraft}
         placeholder="Enter your custom system prompt..."
-      />
-    </div>
-  );
-}
-
-function ParamInput({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step,
-  help,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min: number;
-  max: number;
-  step: number;
-  help?: string;
-}) {
-  const [draft, setDraft] = useState(String(value));
-  const prevValue = useRef(value);
-
-  // Sync draft when the external value changes (e.g. reset to default)
-  if (value !== prevValue.current) {
-    prevValue.current = value;
-    setDraft(String(value));
-  }
-
-  const commit = () => {
-    const v = parseFloat(draft);
-    if (!isNaN(v) && v >= min && v <= max) {
-      onChange(v);
-      setDraft(String(v));
-    } else {
-      // Revert to current value on invalid input
-      setDraft(String(value));
-    }
-  };
-
-  return (
-    <div>
-      <label className="inline-flex items-center gap-1 text-[0.625rem] font-medium text-[var(--muted-foreground)]">
-        {label}
-        {help && <HelpTooltip text={help} size="0.625rem" />}
-      </label>
-      <input
-        type="text"
-        inputMode="decimal"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.currentTarget.blur();
-          }
-        }}
-        min={min}
-        max={max}
-        step={step}
-        className="mt-0.5 w-full rounded-lg bg-[var(--secondary)] px-2.5 py-1.5 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
       />
     </div>
   );

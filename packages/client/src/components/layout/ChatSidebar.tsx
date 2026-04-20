@@ -663,7 +663,7 @@ export function ChatSidebar() {
   return (
     <nav data-component="ChatSidebar" aria-label="Chat navigation" className="mari-chat-sidebar flex h-full flex-col">
       {/* Header */}
-      <div className="relative flex h-12 items-center justify-between bg-[var(--card)]/80 px-4 backdrop-blur-sm">
+      <div className="mari-sidebar-header relative flex h-12 items-center justify-between bg-[var(--card)]/80 px-4 backdrop-blur-sm">
         <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border)]/30" />
         <h2 className="retro-glow-text text-sm font-bold tracking-tight">✧ Chats</h2>
         <div className="flex items-center gap-1">
@@ -851,7 +851,7 @@ export function ChatSidebar() {
 
       {/* ── Multi-select action bar ── */}
       {multiSelectMode && (
-        <div className="border-t border-[var(--border)]/30 bg-[var(--card)]/95 px-3 py-2.5 backdrop-blur-sm">
+        <div className="mari-sidebar-footer border-t border-[var(--border)]/30 bg-[var(--card)]/95 px-3 py-2.5 backdrop-blur-sm">
           <div className="mb-2 text-center text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
             {selectedChatIds.size} selected
           </div>
