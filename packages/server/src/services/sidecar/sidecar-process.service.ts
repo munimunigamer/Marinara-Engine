@@ -5,6 +5,7 @@ import { dirname, join } from "path";
 import type { SidecarBackend } from "@marinara-engine/shared";
 import { sidecarModelService } from "./sidecar-model.service.js";
 import { isAbortError } from "./sidecar-download.js";
+import { buildLlamaArgs, buildLlamaStartupPlans } from "./sidecar-launch-plan.js";
 import { buildLlamaProcessEnv } from "./sidecar-runtime-env.js";
 import { mlxRuntimeService, type MlxRuntimeInstall } from "./mlx-runtime.service.js";
 import { sidecarRuntimeService, type SidecarRuntimeInstall } from "./sidecar-runtime.service.js";
@@ -256,27 +257,13 @@ class SidecarProcessService {
 
   private buildLlamaArgs(modelPath: string, gpuLayers: number, port: number, runtime: SidecarRuntimeInstall): string[] {
     const config = sidecarModelService.getConfig();
-    const args = [
-      "-m",
+    return buildLlamaArgs({
       modelPath,
-      "--host",
-      "127.0.0.1",
-      "--parallel",
-      "2",
-      "--log-disable",
-      "--ctx-size",
-      String(config.contextSize),
-      "--port",
-      String(port),
-    ];
-
-    // Gemma 4 needs split mode disabled on CUDA multi-GPU launches,
-    // but non-CUDA builds may reject the flag entirely.
-    if (/cuda/i.test(runtime.variant) && gpuLayers > 0) {
-      args.push("-sm", "none");
-    }
-    args.push("-ngl", String(gpuLayers));
-    return args;
+      gpuLayers,
+      port,
+      contextSize: config.contextSize,
+      runtimeVariant: runtime.variant,
+    });
   }
 
   private buildMlxArgs(modelRepo: string, port: number): string[] {
@@ -289,18 +276,10 @@ class SidecarProcessService {
 
   private buildLlamaStartupPlans(runtime: SidecarRuntimeInstall): Array<{ gpuLayers: number; label: string }> {
     const config = sidecarModelService.getConfig();
-    if (config.gpuLayers !== -1) {
-      return [{ gpuLayers: config.gpuLayers, label: `gpuLayers=${config.gpuLayers}` }];
-    }
-
-    if (!this.usesGpuRuntime(runtime)) {
-      return [{ gpuLayers: 0, label: "CPU runtime" }];
-    }
-
-    return [
-      { gpuLayers: 999, label: "max GPU offload" },
-      { gpuLayers: 0, label: "CPU fallback" },
-    ];
+    return buildLlamaStartupPlans({
+      configuredGpuLayers: config.gpuLayers,
+      usesGpuRuntime: this.usesGpuRuntime(runtime),
+    });
   }
 
   private shouldRetryStartup(error: unknown): error is SidecarServerExitError {

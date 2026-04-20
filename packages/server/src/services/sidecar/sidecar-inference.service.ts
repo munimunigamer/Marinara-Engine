@@ -10,6 +10,7 @@ import type { SceneAnalysis } from "@marinara-engine/shared";
 import { sanitizeApiError } from "../llm/base-provider.js";
 import { sidecarModelService } from "./sidecar-model.service.js";
 import { sidecarProcessService } from "./sidecar-process.service.js";
+import { resolveSidecarRequestModel } from "./sidecar-request-model.js";
 
 let activeRequests = 0;
 
@@ -61,6 +62,13 @@ type SidecarChatCompletionChunk = {
     };
   }>;
 };
+
+function getRequestModel(): string {
+  return resolveSidecarRequestModel(
+    sidecarModelService.getResolvedBackend(),
+    sidecarModelService.getConfiguredModelRef(),
+  );
+}
 
 export type SidecarTestMessageOutput = {
   content: string;
@@ -135,7 +143,7 @@ async function streamChatCompletion(options: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "local-sidecar",
+      model: getRequestModel(),
       stream: true,
       messages: options.messages,
       max_tokens: options.maxTokens,
@@ -236,7 +244,7 @@ export async function runTestMessage(): Promise<SidecarTestMessageOutput> {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "local-sidecar",
+          model: getRequestModel(),
           stream: false,
           messages: [
             {
